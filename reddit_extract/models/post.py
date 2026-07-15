@@ -1,10 +1,10 @@
 """Normalized Reddit post as harvested from a rendered listing."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping
-
-from ..utils.url import parse_created
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,13 @@ class Post:
     @property
     def created(self) -> str | None:
         """Post creation time as an ISO-8601 string (when available)."""
-        return parse_created(self.created_raw)
+        if not self.created_raw:
+            return None
+        try:
+            ms = int(self.created_raw)
+            return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            return None
 
     @property
     def url(self) -> str | None:

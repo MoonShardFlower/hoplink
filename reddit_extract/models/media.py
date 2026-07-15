@@ -1,4 +1,5 @@
 """Media types and the objects that flow through the extraction pipeline."""
+
 from __future__ import annotations
 
 import enum

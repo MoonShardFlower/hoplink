@@ -17,6 +17,7 @@ Example:
 
         extractor.register_handler(StickerHandler())
 """
+
 from __future__ import annotations
 
 import abc
@@ -55,7 +56,9 @@ class MediaHandler(abc.ABC):
         """
 
     @abc.abstractmethod
-    async def resolve(self, post: Post, ctx: "ExtractionContext") -> List[MediaCandidate]:
+    async def resolve(
+        self, post: Post, ctx: "ExtractionContext"
+    ) -> List[MediaCandidate]:
         """
         Return the post's downloadable media candidates.
 

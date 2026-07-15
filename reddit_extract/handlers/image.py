@@ -1,4 +1,5 @@
 """Single-image posts (full resolution straight from i.redd.it)."""
+
 from __future__ import annotations
 
 import logging

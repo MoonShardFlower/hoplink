@@ -1,12 +1,11 @@
 """Sources: *what* to scrape (subreddits, user pages, multireddits)."""
+
 from __future__ import annotations
 
 import abc
 import re
 from dataclasses import dataclass
 from typing import Any
-
-from ..utils.url import parse_subreddit, parse_username
 
 SUBREDDIT_SORTS = ("hot", "new", "top", "rising")
 USER_SORTS = ("hot", "new", "top", "controversial")
@@ -45,10 +44,14 @@ def _validate(sort: str, time_filter: str, limit: int, sorts: tuple[str, ...]) -
         ValueError: If ``sort``, ``time_filter``, or ``limit`` is invalid.
     """
     if sort not in sorts:
-        raise ValueError("sort must be one of {}, got {!r}".format("/".join(sorts), sort))
+        raise ValueError(
+            "sort must be one of {}, got {!r}".format("/".join(sorts), sort)
+        )
     if time_filter not in TIME_FILTERS:
         raise ValueError(
-            "time_filter must be one of {}, got {!r}".format("/".join(TIME_FILTERS), time_filter)
+            "time_filter must be one of {}, got {!r}".format(
+                "/".join(TIME_FILTERS), time_filter
+            )
         )
     if limit < 1:
         raise ValueError("limit must be >= 1, got {}".format(limit))
@@ -56,11 +59,11 @@ def _validate(sort: str, time_filter: str, limit: int, sorts: tuple[str, ...]) -
 
 @dataclass(frozen=True)
 class Subreddit(Source):
-    """A subreddit listing.
+    """
+    A subreddit listing.
 
     Attributes:
-        name: Subreddit name; accepts a URL, ``r/name``, or a bare name (all
-            normalized to the bare name).
+        name: Subreddit name; accepts a URL, ``r/name``, or a bare name (all normalized to the bare name).
         sort: One of ``hot``, ``new``, ``top``, ``rising``.
         time_filter: Time window for ``top`` sorting (``hour``..``all``).
         limit: Maximum number of posts to harvest.
@@ -93,7 +96,8 @@ class Subreddit(Source):
 
 @dataclass(frozen=True)
 class MultiReddit(Source):
-    """Several subreddits browsed as one combined listing (``r/a+b+c``).
+    """
+    Several subreddits browsed as one combined listing (``r/a+b+c``).
 
     Attributes:
         names: The subreddit names to combine (each normalized to its bare name).
@@ -137,7 +141,8 @@ class MultiReddit(Source):
 
 @dataclass(frozen=True)
 class UserProfile(Source):
-    """A user's submitted posts.
+    """
+    A user's submitted posts.
 
     Attributes:
         name: Username; accepts a URL, ``u/name``, or a bare name (all normalized to the bare name).
@@ -169,7 +174,8 @@ class UserProfile(Source):
 
 
 def parse_source(text: str, **overrides: Any) -> Source:
-    """Build the appropriate Source from a free-form string.
+    """
+    Build the appropriate Source from a free-form string.
 
     Args:
         text: A source reference. ``u/name`` and ``/user/name`` references (or reddit.com user URLs) become a UserProfile.
@@ -192,3 +198,43 @@ def parse_source(text: str, **overrides: Any) -> Source:
     if "+" in name:
         return MultiReddit(tuple(name.split("+")), **kwargs)
     return Subreddit(name, **kwargs)
+
+
+def parse_subreddit(value: str) -> str:
+    """
+    Normalize a subreddit reference to its bare name.
+
+    Args:
+        value: A full reddit.com URL, ``r/name``, ``/r/name/``, or a bare name.
+
+    Returns:
+        The bare subreddit name (which may still contain ``+`` for a multireddit).
+    """
+    value = value.strip()
+    m = re.search(r"reddit\.com/r/([^/?#]+)", value, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"^/?r/([^/?#]+)", value, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return value.strip("/")
+
+
+def parse_username(value: str) -> str:
+    """
+    Normalize a user reference to its bare name.
+
+    Args:
+        value: A full reddit.com URL, ``u/name``, ``/u/name/``, ``user/name``, or a bare name.
+
+    Returns:
+        The bare username.
+    """
+    value = value.strip()
+    m = re.search(r"reddit\.com/(?:user|u)/([^/?#]+)", value, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"^/?u(?:ser)?/([^/?#]+)", value, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return value.strip("/")

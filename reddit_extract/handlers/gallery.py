@@ -1,4 +1,5 @@
 """Gallery posts: visit the post-page, read the carousel, reconstruct originals."""
+
 from __future__ import annotations
 
 import logging

@@ -10,6 +10,7 @@ Two-tier resolution strategy:
    the tallest **video-only** stream. (DASH keeps audio in a separate file, so
    these fallback downloads have no sound.)
 """
+
 from __future__ import annotations
 
 import json
@@ -163,8 +164,10 @@ class VideoHandler(MediaHandler):
         manifest = await ctx.fetch(base + "/DASHPlaylist.mpd")
         if not manifest.ok or manifest.body is None:
             await ctx.skip(
-                base, "DASH manifest unavailable ({})".format(
-                    manifest.error or manifest.status)
+                base,
+                "DASH manifest unavailable ({})".format(
+                    manifest.error or manifest.status
+                ),
             )
             return []
         video_url = best_dash_video(manifest.body.decode("utf-8", "replace"), base)

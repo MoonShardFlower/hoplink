@@ -1,4 +1,5 @@
 """Link posts whose target is a direct image on an external host."""
+
 from __future__ import annotations
 
 import logging

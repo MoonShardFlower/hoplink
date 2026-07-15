@@ -1,4 +1,5 @@
 """Extractor-wide configuration."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -73,8 +74,12 @@ class ExtractorConfig:
         )
         self._require_non_negative("scroll_pause", "img_delay")
         self._require_positive(
-            "max_stale_scrolls", "scroll_px", "manifest_flush_every",
-            "nav_timeout_ms", "post_wait_timeout_ms", "request_timeout_ms",
+            "max_stale_scrolls",
+            "scroll_px",
+            "manifest_flush_every",
+            "nav_timeout_ms",
+            "post_wait_timeout_ms",
+            "request_timeout_ms",
         )
         if self.gallery_wait_ms < 0:
             raise ValueError("gallery_wait_ms must be >= 0")

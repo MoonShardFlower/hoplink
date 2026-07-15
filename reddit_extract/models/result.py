@@ -1,4 +1,5 @@
 """Extraction results."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,17 +17,17 @@ class ExtractionResult:
     source: Source
     dry_run: bool = False
     posts_scanned: int = 0
-    posts_matched: int = 0          #: posts a handler produced media (or metadata) for
-    media_found: int = 0            #: candidates resolved (including known/existing)
-    media_saved: int = 0            #: files actually written this run
-    skipped_existing: int = 0       #: file already on disk
-    skipped_known: int = 0          #: URL already recorded in the manifest
+    posts_matched: int = 0  #: posts a handler produced media (or metadata) for
+    media_found: int = 0  #: candidates resolved (including known/existing)
+    media_saved: int = 0  #: files actually written this run
+    skipped_existing: int = 0  #: file already on disk
+    skipped_known: int = 0  #: URL already recorded in the manifest
     failures: list[tuple[str, str]] = field(default_factory=list)  #: (url, reason)
     items: list[MediaItem] = field(default_factory=list)
     posts: list[Post] = field(default_factory=list)  #: the matched posts
     output_dir: str | None = None
     manifest_path: str | None = None
-    error: str | None = None        #: set instead of raising in batch jobs
+    error: str | None = None  #: set instead of raising in batch jobs
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
 
