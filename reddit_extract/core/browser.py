@@ -56,9 +56,10 @@ class BrowserManager:
             config: Configuration controlling launch options and timeouts.
         """
         self._config = config
-        self._pw = None
-        self._browser = None
-        self._context = None
+        # Playwright objects are untyped. Hold them as Any until start() launches them.
+        self._pw: Any = None
+        self._browser: Any = None
+        self._context: Any = None
         self._timeout_error: type[Exception] = TimeoutError
 
     @property

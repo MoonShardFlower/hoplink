@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Iterable, List
+from typing import TYPE_CHECKING, Iterable, List
 
 from ..models.media import MediaCandidate, MediaType
 from ..models.post import Post
 from .base import MediaHandler
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..core.context import ExtractionContext
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +70,9 @@ class GalleryHandler(MediaHandler):
         """Match ``gallery`` posts that have a permalink to visit."""
         return post.type == "gallery" and bool(post.permalink)
 
-    async def resolve(self, post: Post, ctx) -> List[MediaCandidate]:
+    async def resolve(
+        self, post: Post, ctx: "ExtractionContext"
+    ) -> List[MediaCandidate]:
         """
         Load the post page, read the carousel, and rebuild each slide's URL.
 
@@ -75,7 +80,10 @@ class GalleryHandler(MediaHandler):
         """
         try:
             html = await ctx.evaluate_on(
-                post.url, JS_GALLERY, arg=post.id, wait_ms=ctx.config.gallery_wait_ms
+                post.url or "",
+                JS_GALLERY,
+                arg=post.id,
+                wait_ms=ctx.config.gallery_wait_ms,
             )
         except Exception as exc:
             log.debug("gallery %s failed", post.permalink, exc_info=True)

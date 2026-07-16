@@ -17,11 +17,14 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from ..models.media import MediaCandidate, MediaType
 from ..models.post import Post
 from .base import MediaHandler
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..core.context import ExtractionContext
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +146,9 @@ class VideoHandler(MediaHandler):
         """Match ``video`` and ``gif`` (silent video) posts."""
         return post.type in ("video", "gif")
 
-    async def resolve(self, post: Post, ctx) -> List[MediaCandidate]:
+    async def resolve(
+        self, post: Post, ctx: "ExtractionContext"
+    ) -> List[MediaCandidate]:
         """
         Resolve the best MP4: packaged rendition first, DASH fallback second.
 

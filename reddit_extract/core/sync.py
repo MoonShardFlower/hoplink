@@ -67,7 +67,7 @@ class RedditExtractor:
         )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._pending: set[concurrent.futures.Future] = set()
+        self._pending: set[concurrent.futures.Future[Any]] = set()
         self._lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------

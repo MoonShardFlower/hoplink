@@ -40,7 +40,7 @@ class Manifest:
         existing_files: Iterable[str] = (),
     ) -> None:
         self.source_key = source_key
-        entries: dict[str, dict] = {}
+        entries: dict[str, dict[str, Any]] = {}
         if isinstance(data, Mapping):
             raw = data.get("files")
             if isinstance(raw, Mapping):
@@ -60,7 +60,7 @@ class Manifest:
     def __contains__(self, filename: str) -> bool:
         return filename in self._entries
 
-    def entries(self) -> Iterator[tuple[str, dict]]:
+    def entries(self) -> Iterator[tuple[str, dict[str, Any]]]:
         """Iterate over ``(filename, record)`` pairs already in the manifest."""
         return iter(self._entries.items())
 
@@ -102,7 +102,7 @@ class Manifest:
         """Record ``entry`` under ``filename`` (overwriting any prior record)."""
         self._entries[filename] = dict(entry)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Return the full manifest as a JSON-serializable dict."""
         return {
             "source": self.source_key,

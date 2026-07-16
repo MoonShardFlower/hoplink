@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import TYPE_CHECKING, List
 
 from ..models.media import MediaCandidate, MediaType
 from ..models.post import Post
 from .base import MediaHandler
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..core.context import ExtractionContext
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +24,9 @@ class ImageHandler(MediaHandler):
         """Match ``image`` posts that carry a content href."""
         return post.type == "image" and bool(post.content_href)
 
-    async def resolve(self, post: Post, ctx) -> List[MediaCandidate]:
+    async def resolve(
+        self, post: Post, ctx: "ExtractionContext"
+    ) -> List[MediaCandidate]:
         """Return the image URL as a candidate if its extension is allowed."""
         url = post.content_href or ""
         ext = ctx.extension_of(url)
