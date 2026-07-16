@@ -1,0 +1,11 @@
+# Codecov configuration.
+# Codecov is used for the coverage badge and PR coverage comments only. Its status
+# checks are informational, so Codecov never fails CI or blocks a pull request.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
