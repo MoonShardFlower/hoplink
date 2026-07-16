@@ -72,6 +72,12 @@ class Manifest:
             if entry.get("media_url")
         }
 
+    def known_hashes(self) -> set[str]:
+        """Return every content hash (``sha256``) recorded in the manifest, if any."""
+        return {
+            entry["sha256"] for entry in self._entries.values() if entry.get("sha256")
+        }
+
     @staticmethod
     def _max_index(filenames: Iterable[str]) -> int:
         """Return the largest leading integer across ``filenames`` (0 if none)."""

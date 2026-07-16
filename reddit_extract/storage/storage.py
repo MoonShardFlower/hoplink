@@ -60,7 +60,7 @@ class MemoryStorage(StorageBackend):
 
     def __init__(self) -> None:
         self.files: dict[str, dict[str, bytes]] = {}
-        self.manifests: dict[str, dict] = {}
+        self.manifests: dict[str, dict[str, Any]] = {}
 
     def prepare(self, key: str) -> None:
         self.files.setdefault(key, {})
@@ -135,7 +135,8 @@ class FilesystemStorage(StorageBackend):
             return None
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            return data if isinstance(data, Mapping) else None
         except (ValueError, OSError):
             return None
 

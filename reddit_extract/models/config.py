@@ -42,6 +42,8 @@ class ExtractorConfig:
     output_dir: str = "downloads"
     #: write the manifest to storage after every N saved files
     manifest_flush_every: int = 1
+    #: skip writing a downloaded file whose content hash matches one already saved for this source
+    dedupe_by_hash: bool = False
 
     # -- pacing ---------------------------------------------------------
     scroll_pause: float = 2.0

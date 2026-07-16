@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Iterable, Union
+from typing import Any, Iterable, Union
 
 MediaTypeLike = Union["MediaType", str, Iterable[Union["MediaType", str]]]
 
@@ -37,33 +37,53 @@ class MediaType(enum.Flag):
         Coerce a flexible value into a single MediaType flag.
 
         Args:
-            value: A MediaType, a case-insensitive type name such as `"image"`` or ``"all"``, or an iterable mixing either.
-                Iterables are OR-ed together into one combined flag.
+            value: A MediaType; a case-insensitive type name such as ``"image"`` or ``"all"``; a comma-separated string
+                such as ``"image,gallery"``; or an iterable mixing any of these. Strings are split on commas, and every
+                part is OR-ed together into one combined flag.
 
         Returns:
             The resolved MediaType, possibly a combination of flags.
 
         Raises:
-            ValueError: If a string does not name a known media type.
+            ValueError: If a part does not name a known media type, or a string names none.
         """
         if isinstance(value, MediaType):
             return value
         if isinstance(value, str):
-            name = value.strip().upper()
-            try:
-                return cls[name]
-            except KeyError:
-                # dict.fromkeys dedupes
-                names = dict.fromkeys([m.name.lower() for m in cls] + ["all"])
-                raise ValueError(
-                    "unknown media type {!r} (allowed: {})".format(
-                        value, ", ".join(names)
-                    )
-                ) from None
+            names = [name.strip() for name in value.split(",") if name.strip()]
+            if not names:
+                raise ValueError("no media type given in {!r}".format(value))
+            combined = cls(0)
+            for name in names:
+                combined |= cls._by_name(name)
+            return combined
         combined = cls(0)
         for item in value:
             combined |= cls.coerce(item)
         return combined
+
+    @classmethod
+    def _by_name(cls, name: str) -> "MediaType":
+        """
+        Resolve a single case-insensitive type name to its flag.
+
+        Args:
+            name: One media type name, e.g. ``"image"`` or ``"all"``.
+
+        Returns:
+            The matching MediaType.
+
+        Raises:
+            ValueError: If ``name`` is not a known media type.
+        """
+        try:
+            return cls[name.strip().upper()]
+        except KeyError:
+            # dict.fromkeys dedupes; every single-bit member has a name (mypy: str | None)
+            allowed = dict.fromkeys([m.name.lower() for m in cls if m.name] + ["all"])
+            raise ValueError(
+                "unknown media type {!r} (allowed: {})".format(name, ", ".join(allowed))
+            ) from None
 
     @property
     def label(self) -> str:
@@ -104,6 +124,7 @@ class MediaItem:
         path: Absolute path/URI once written, else None.
         downloaded: Whether the bytes were actually written this run.
         size: File size in bytes once downloaded, else None.
+        sha256: Hex SHA-256 of the file's bytes, set when content de-duplication is enabled, else None.
         post_id: ID of the originating post.
         post_url: Permalink of the originating post.
         title: Title of the originating post.
@@ -118,6 +139,7 @@ class MediaItem:
     path: str | None = None
     downloaded: bool = False
     size: int | None = None
+    sha256: str | None = None
     post_id: str | None = None
     post_url: str | None = None
     title: str | None = None
@@ -125,7 +147,7 @@ class MediaItem:
     created: str | None = None
     source_key: str | None = None
 
-    def to_manifest_entry(self) -> dict:
+    def to_manifest_entry(self) -> dict[str, Any]:
         """
         Serialize this item to a manifest record.
 
@@ -133,7 +155,7 @@ class MediaItem:
             A JSON-serializable dict with the post's provenance (id, url, title, author, creation time),
             the downloaded ``media_url``, and the ``media_type`` label.
         """
-        return {
+        entry = {
             "post_id": self.post_id,
             "post_url": self.post_url,
             "title": self.title,
@@ -141,4 +163,31 @@ class MediaItem:
             "created": self.created,
             "media_url": self.url,
             "media_type": self.media_type.label,
+        }
+        # Only present when content de-duplication ran, so manifests are otherwise unchanged.
+        if self.sha256:
+            entry["sha256"] = self.sha256
+        return entry
+
+    def to_report_dict(self) -> dict[str, Any]:
+        """
+        Serialize this item for a run report.
+
+        Returns:
+            A JSON-serializable dict describing the stored (or, in a dry run, planned) file:
+            its name, path, size, content hash, and the originating post's provenance.
+        """
+        return {
+            "filename": self.filename,
+            "path": self.path,
+            "url": self.url,
+            "media_type": self.media_type.label,
+            "downloaded": self.downloaded,
+            "size": self.size,
+            "sha256": self.sha256,
+            "post_id": self.post_id,
+            "post_url": self.post_url,
+            "title": self.title,
+            "author": self.author,
+            "created": self.created,
         }

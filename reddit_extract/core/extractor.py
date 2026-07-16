@@ -8,12 +8,13 @@ The synchronous `RedditExtractor` facade wraps this class; all behavior lives he
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
 from typing import (
     Any,
-    AsyncIterator,
+    AsyncGenerator,
     Awaitable,
     Callable,
     Iterable,
@@ -263,7 +264,7 @@ class AsyncRedditExtractor:
         concurrency: int = 1,
         raise_on_error: bool = False,
         **extract_kwargs: Any,
-    ) -> AsyncIterator[ExtractionResult]:
+    ) -> AsyncGenerator[ExtractionResult, None]:
         """
         Like `batch`, but yields each result as soon as it finishes.
 
@@ -292,7 +293,7 @@ class AsyncRedditExtractor:
         sources: Iterable[SourceLike],
         concurrency: int,
         runner: Callable[[SourceLike], Awaitable[ExtractionResult]],
-    ) -> List["asyncio.Task"]:
+    ) -> List["asyncio.Task[ExtractionResult]"]:
         """
         Schedule one concurrency-bounded task per source.
 
@@ -313,7 +314,7 @@ class AsyncRedditExtractor:
         return [asyncio.ensure_future(guarded(s)) for s in sources]
 
     @staticmethod
-    async def _reap(tasks: List["asyncio.Task"]) -> None:
+    async def _reap(tasks: List["asyncio.Task[ExtractionResult]"]) -> None:
         """Cancel any unfinished tasks and wait for all of them to settle."""
         for task in tasks:
             task.cancel()
@@ -321,7 +322,9 @@ class AsyncRedditExtractor:
 
     # -- internals ---------------------------------------------------------
 
-    def _job_runner(self, raise_on_error: bool, extract_kwargs: dict):
+    def _job_runner(
+        self, raise_on_error: bool, extract_kwargs: dict[str, Any]
+    ) -> Callable[[SourceLike], Awaitable[ExtractionResult]]:
         """
         Build a coroutine that runs one source and captures its errors.
 
@@ -421,7 +424,7 @@ class AsyncRedditExtractor:
         modern = bool(await page.evaluate(JS_IS_MODERN))
         harvest_js = JS_HARVEST if modern else JS_HARVEST_LEGACY
 
-        harvested: dict[str, dict] = {}
+        harvested: dict[str, dict[str, Any]] = {}
         order: List[str] = []
         stale = 0
         while len(harvested) < source.limit and stale < cfg.max_stale_scrolls:
@@ -538,6 +541,7 @@ class AsyncRedditExtractor:
             existing_files=storage.list_files(source.key),
         )
         known = manifest.known_urls()
+        known_hashes = manifest.known_hashes()
         unflushed = 0
 
         page = await self._browser.new_page()
@@ -605,6 +609,18 @@ class AsyncRedditExtractor:
 
                     outcome = await self._download(ctx, cand)
                     if outcome.ok and outcome.body is not None:
+                        if cfg.dedupe_by_hash:
+                            digest = hashlib.sha256(outcome.body).hexdigest()
+                            if digest in known_hashes:
+                                # Same bytes as a file already saved for this source (a repost/crosspost at a new URL).
+                                result.skipped_duplicate += 1
+                                await emit(
+                                    ev.on_skip, source, cand.url, "duplicate content"
+                                )
+                                await asyncio.sleep(cfg.img_delay)
+                                continue
+                            known_hashes.add(digest)
+                            item.sha256 = digest
                         item.path = storage.write(source.key, fname, outcome.body)
                         item.size = len(outcome.body)
                         item.downloaded = True
