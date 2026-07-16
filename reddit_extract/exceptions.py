@@ -11,6 +11,10 @@ class BrowserError(RedditExtractError):
     """The underlying browser could not be started or has died."""
 
 
+class ConfigFileError(RedditExtractError):
+    """A ``--config`` TOML file is missing, malformed, or names an unknown key."""
+
+
 class NoPostsFoundError(RedditExtractError):
     """
     A listing page rendered no posts.
