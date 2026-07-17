@@ -51,6 +51,12 @@ class ExtractorConfig:
     max_stale_scrolls: int = 10
     scroll_px: int = 18000
 
+    # -- download retries -----------------------------------------------
+    #: extra attempts for a download that fails transiently (0 disables retrying)
+    max_retries: int = 2
+    #: base seconds for exponential retry backoff; the wait never dips below ``img_delay``
+    retry_backoff: float = 1.0
+
     # -- timeouts (milliseconds) ----------------------------------------
     nav_timeout_ms: int = 60000
     post_wait_timeout_ms: int = 30000
@@ -74,7 +80,9 @@ class ExtractorConfig:
         object.__setattr__(
             self, "default_media_types", MediaType.coerce(self.default_media_types)
         )
-        self._require_non_negative("scroll_pause", "img_delay")
+        self._require_non_negative(
+            "scroll_pause", "img_delay", "max_retries", "retry_backoff"
+        )
         self._require_positive(
             "max_stale_scrolls",
             "scroll_px",

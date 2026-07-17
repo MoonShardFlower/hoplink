@@ -18,6 +18,7 @@ from typing import Any, Coroutine, Iterable, Iterator, List, Sequence, TypeVar
 from ..events import Events
 from ..handlers.base import MediaHandler
 from ..models.config import ExtractorConfig
+from ..models.filters import PostFilter
 from ..models.media import MediaTypeLike
 from ..models.result import ExtractionResult
 from ..storage.storage import StorageBackend
@@ -53,6 +54,7 @@ class RedditExtractor:
         storage: StorageBackend | None = None,
         handlers: Sequence[MediaHandler] | None = None,
         events: Events | None = None,
+        post_filter: PostFilter | None = None,
         browser: BrowserManager | None = None,
         **config_overrides: Any,
     ) -> None:
@@ -62,6 +64,7 @@ class RedditExtractor:
             storage=storage,
             handlers=handlers,
             events=events,
+            post_filter=post_filter,
             browser=browser,
             **config_overrides,
         )
@@ -162,6 +165,7 @@ class RedditExtractor:
         media_types: MediaTypeLike | None = None,
         output_dir: str | None = None,
         dry_run: bool = False,
+        post_filter: PostFilter | None = None,
         events: Events | None = None,
     ) -> ExtractionResult:
         """Extract one source. See `AsyncRedditExtractor.extract` for arguments."""
@@ -171,6 +175,7 @@ class RedditExtractor:
                 media_types=media_types,
                 output_dir=output_dir,
                 dry_run=dry_run,
+                post_filter=post_filter,
                 events=events,
             )
         )

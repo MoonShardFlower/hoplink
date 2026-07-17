@@ -1,4 +1,5 @@
 from .config import DEFAULT_FORMATS, DEFAULT_UA, ExtractorConfig
+from .filters import PostFilter
 from .media import MediaCandidate, MediaItem, MediaType
 from .post import Post
 from .result import ExtractionResult
@@ -12,6 +13,7 @@ __all__ = [
     "MediaItem",
     "MediaType",
     "Post",
+    "PostFilter",
     "ExtractionResult",
     "MultiReddit",
     "Source",

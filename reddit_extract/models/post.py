@@ -7,6 +7,16 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 
+def _to_int(value: Any) -> int | None:
+    """Parse a harvested numeric attribute, returning None when it is absent or not a number."""
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass(frozen=True)
 class Post:
     """
@@ -21,7 +31,11 @@ class Post:
         title: Post title.
         subreddit: Subreddit name, without the ``r/`` prefix.
         domain: Domain of the linked content.
-        created_raw: Raw creation timestamp as harvested (epoch ms or ISO text).
+        created_raw: Raw creation timestamp as harvested (ISO text on the modern UI, epoch ms on the legacy one).
+        score: Net upvotes, or None when the listing doesn't report a score.
+        comment_count: Number of comments, or None when the listing doesn't report one.
+        flair: Link-flair text, or None when the post is unflaired.
+        stickied: Whether the post is stickied/pinned in its listing.
         packaged_media_json: Raw ``packaged-media-json`` attribute for videos, when present.
         raw: The full harvested attribute dict, kept for custom handlers.
     """
@@ -35,6 +49,10 @@ class Post:
     subreddit: str | None = None
     domain: str | None = None
     created_raw: str | None = None
+    score: int | None = None
+    comment_count: int | None = None
+    flair: str | None = None
+    stickied: bool = False
     packaged_media_json: str | None = field(default=None, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
@@ -47,7 +65,8 @@ class Post:
             data: Attribute mapping produced by the listing-harvest JS (modern or legacy). The full mapping is retained on ``raw``.
 
         Returns:
-            A normalized Post. The ``r/`` prefix is stripped from the subreddit name.
+            A normalized Post. The ``r/`` prefix is stripped from the subreddit name, and numeric
+            attributes that the listing omitted (a hidden score, say) stay None rather than becoming 0.
         """
         sub = (data.get("subreddit") or "").strip()
         if sub.lower().startswith("r/"):
@@ -62,20 +81,40 @@ class Post:
             subreddit=sub or None,
             domain=data.get("domain"),
             created_raw=data.get("created"),
+            score=_to_int(data.get("score")),
+            comment_count=_to_int(data.get("comment_count")),
+            flair=(data.get("flair") or "").strip() or None,
+            stickied=bool(data.get("stickied")),
             packaged_media_json=data.get("packaged_media"),
             raw=dict(data),
         )
 
     @property
-    def created(self) -> str | None:
-        """Post creation time as an ISO-8601 string (when available)."""
+    def created_at(self) -> datetime | None:
+        """
+        Post creation time as a timezone-aware UTC datetime (None when unavailable or unparseable).
+
+        The two listing UIs disagree on format: the legacy one stamps epoch milliseconds, the modern
+        one ISO-8601 text. Both are accepted here.
+        """
         if not self.created_raw:
             return None
+        text = str(self.created_raw).strip()
         try:
-            ms = int(self.created_raw)
-            return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
-        except (ValueError, TypeError):
+            return datetime.fromtimestamp(int(text) / 1000, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
             return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    @property
+    def created(self) -> str | None:
+        """Post creation time as an ISO-8601 string (when available)."""
+        moment = self.created_at
+        return moment.isoformat() if moment else None
 
     @property
     def url(self) -> str | None:

@@ -30,6 +30,7 @@ from ..exceptions import NoPostsFoundError
 from ..handlers import default_handlers
 from ..handlers.base import MediaHandler
 from ..models.config import ExtractorConfig
+from ..models.filters import PostFilter
 from ..models.media import MediaCandidate, MediaItem, MediaType, MediaTypeLike
 from ..models.post import Post
 from ..models.result import ExtractionResult
@@ -44,10 +45,13 @@ SourceLike = Union[Source, str]
 
 # JS run in the listing page: read every rendered post card's key attributes.
 # packaged-media-json (direct MP4 renditions) lives on the embedded player element, not on the post card itself.
+# `stickied` is a boolean attribute (it renders as stickied="" ), so it must be tested with hasAttribute:
+# getAttribute would hand back the empty string, which is falsy.
 JS_HARVEST = """
 () => Array.from(document.querySelectorAll('shreddit-post')).map(p => {
   const titleEl = p.querySelector('[slot="title"]');
   const player = p.querySelector('shreddit-player, shreddit-player-2, [packaged-media-json]');
+  const flairEl = p.querySelector('[slot="post-flair"]');
   return {
     id: p.getAttribute('id'),
     type: p.getAttribute('post-type'),
@@ -57,6 +61,10 @@ JS_HARVEST = """
     created: p.getAttribute('created-timestamp'),
     subreddit: p.getAttribute('subreddit-prefixed-name'),
     domain: p.getAttribute('domain'),
+    score: p.getAttribute('score'),
+    comment_count: p.getAttribute('comment-count'),
+    flair: flairEl ? flairEl.textContent.trim() : null,
+    stickied: p.hasAttribute('stickied'),
     packaged_media: (player && player.getAttribute('packaged-media-json'))
                     || p.getAttribute('packaged-media-json'),
     player_src: player ? player.getAttribute('src') : null,
@@ -70,6 +78,8 @@ JS_IS_MODERN = "() => !!document.querySelector('shreddit-post')"
 
 # Reddit still serves some listings (notably multireddits like r/a+b) on the legacy UI. Its .thing elements carry
 # data-* attributes we map onto the same harvest shape; the granular post type is derived from those attributes.
+# The legacy markup has no data-stickied attribute -- it marks a sticky with a CSS class instead -- and spells
+# creation time as epoch milliseconds rather than the modern UI's ISO text (Post.created_at reads both).
 JS_HARVEST_LEGACY = """
 () => Array.from(document.querySelectorAll('#siteTable .thing'))
   .filter(t => t.getAttribute('data-promoted') !== 'true')
@@ -81,6 +91,7 @@ JS_HARVEST_LEGACY = """
     else if (domain === 'v.redd.it') type = 'video';
     else if (domain === 'i.redd.it') type = 'image';
     const titleEl = t.querySelector('a.title');
+    const flairEl = t.querySelector('.linkflairlabel');
     return {
       id: t.getAttribute('data-fullname'),
       type,
@@ -90,6 +101,10 @@ JS_HARVEST_LEGACY = """
       created: t.getAttribute('data-timestamp'),
       subreddit: t.getAttribute('data-subreddit-prefixed'),
       domain,
+      score: t.getAttribute('data-score'),
+      comment_count: t.getAttribute('data-comments-count'),
+      flair: flairEl ? flairEl.textContent.trim() : null,
+      stickied: t.classList.contains('stickied'),
       packaged_media: null,
       player_src: null,
       title: titleEl ? titleEl.textContent.trim() : null,
@@ -101,6 +116,10 @@ JS_HARVEST_LEGACY = """
 JS_NEXT_PAGE = """
 () => { const a = document.querySelector('span.next-button a'); return a ? a.href : null; }
 """
+
+#: Non-2xx statuses a retry could plausibly clear, alongside anything >= 500. Status 0 is how
+#: `BrowserManager.fetch` reports a transport error (timeout, connection reset, DNS failure).
+RETRY_STATUSES = frozenset({0, 408, 425, 429})
 
 
 class AsyncRedditExtractor:
@@ -118,6 +137,7 @@ class AsyncRedditExtractor:
         storage: Where files and manifests go. Defaults to the filesystem under ``config.output_dir``.
         handlers: Replaces the default handler chain entirely.
         events: Default progress callbacks, merged with per-call events.
+        post_filter: Default post predicates, overridable per call.
         browser: Custom browser manager (mainly for tests).
     """
 
@@ -128,6 +148,7 @@ class AsyncRedditExtractor:
         storage: StorageBackend | None = None,
         handlers: Sequence[MediaHandler] | None = None,
         events: Events | None = None,
+        post_filter: PostFilter | None = None,
         browser: BrowserManager | None = None,
         **config_overrides: Any,
     ) -> None:
@@ -141,6 +162,7 @@ class AsyncRedditExtractor:
             list(handlers) if handlers is not None else default_handlers()
         )
         self._events = events or Events()
+        self._post_filter = post_filter
         self._browser = browser or BrowserManager(cfg)
         self._start_lock = asyncio.Lock()
 
@@ -198,6 +220,7 @@ class AsyncRedditExtractor:
         media_types: MediaTypeLike | None = None,
         output_dir: str | None = None,
         dry_run: bool = False,
+        post_filter: PostFilter | None = None,
         events: Events | None = None,
     ) -> ExtractionResult:
         """
@@ -208,6 +231,7 @@ class AsyncRedditExtractor:
             media_types: Which media to extract. Defaults to the config's ``default_media_types`` (images and galleries).
             output_dir: Override the storage root for this call only.
             dry_run: Resolve every candidate but download nothing.
+            post_filter: Predicates narrowing which harvested posts to keep, replacing the extractor's default for this call.
             events: Extra progress callbacks for this call, merged over the extractor's defaults.
 
         Returns:
@@ -222,7 +246,8 @@ class AsyncRedditExtractor:
         )
         storage = self._resolve_storage(output_dir)
         ev = self._events.merged_with(events)
-        return await self._run_job(src, wanted, storage, dry_run, ev)
+        filt = post_filter if post_filter is not None else self._post_filter
+        return await self._run_job(src, wanted, storage, dry_run, filt, ev)
 
     async def batch(
         self,
@@ -478,21 +503,36 @@ class AsyncRedditExtractor:
         return "{:04d}_{:02d}.{}".format(index, part, ext)
 
     @staticmethod
-    async def _download(ctx: ExtractionContext, cand: MediaCandidate) -> FetchResult:
+    def _is_transient(result: FetchResult) -> bool:
         """
-        Fetch a candidate and validate its Content-Type.
+        Whether a failed fetch is worth retrying.
+
+        Args:
+            result: The unsuccessful FetchResult to classify.
+
+        Returns:
+            True for faults that a later attempt could plausibly survive: transport errors
+            (`BrowserManager.fetch` reports those with status 0 -- a timeout, reset, or DNS failure),
+            rate limiting, and server-side errors. A 404 or 403 is the CDN's settled answer, so it is not retried.
+        """
+        return result.status in RETRY_STATUSES or result.status >= 500
+
+    @staticmethod
+    def _validate(
+        ctx: ExtractionContext, cand: MediaCandidate, result: FetchResult
+    ) -> FetchResult:
+        """
+        Check a successful response's Content-Type against what the candidate expects.
 
         Args:
             ctx: The active extraction context.
-            cand: The candidate to download.
+            cand: The candidate that was downloaded.
+            result: The successful FetchResult to validate.
 
         Returns:
-            The successful FetchResult, or an unsuccessful one if the fetch failed, the response was a GIF while
-            GIFs are disabled, or the Content-Type matched none of ``cand.content_prefixes``.
+            ``result`` unchanged when the type is acceptable, otherwise an unsuccessful FetchResult
+            explaining the mismatch. These verdicts are deterministic, so `_download` never retries them.
         """
-        result = await ctx.fetch(cand.url)
-        if not result.ok:
-            return result
         ctype = result.content_type
         expects_image = any(p.startswith("image/") for p in cand.content_prefixes)
         if expects_image and ctype == "image/gif" and "gif" not in ctx.formats:
@@ -505,12 +545,52 @@ class AsyncRedditExtractor:
             )
         return result
 
+    @staticmethod
+    async def _download(ctx: ExtractionContext, cand: MediaCandidate) -> FetchResult:
+        """
+        Fetch a candidate, retrying transient failures, and validate its Content-Type.
+
+        A flaky CDN shouldn't turn into a permanent entry in ``result.failures``, so a fetch that fails
+        transiently (see `_is_transient`) is retried up to ``config.max_retries`` times with exponential
+        backoff. Content-Type rejections are final: they'd fail identically on every attempt.
+
+        Args:
+            ctx: The active extraction context.
+            cand: The candidate to download.
+
+        Returns:
+            The successful FetchResult, or an unsuccessful one if the last attempt failed, the response was
+            a GIF while GIFs are disabled, or the Content-Type matched none of ``cand.content_prefixes``.
+        """
+        cfg = ctx.config
+        attempts = cfg.max_retries + 1
+        result = FetchResult(ok=False, error="no attempt made")
+        for attempt in range(1, attempts + 1):
+            result = await ctx.fetch(cand.url)
+            if result.ok:
+                return AsyncRedditExtractor._validate(ctx, cand, result)
+            if attempt >= attempts or not AsyncRedditExtractor._is_transient(result):
+                return result
+            # Back off exponentially, but never faster than the job's politeness delay.
+            delay = max(cfg.img_delay, cfg.retry_backoff * (2 ** (attempt - 1)))
+            log.info(
+                "attempt %d/%d for %s failed (%s); retrying in %.1fs",
+                attempt,
+                attempts,
+                cand.url,
+                result.error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        return result
+
     async def _run_job(
         self,
         source: Source,
         wanted: MediaType,
         storage: StorageBackend,
         dry_run: bool,
+        post_filter: PostFilter | None,
         ev: Events,
     ) -> ExtractionResult:
         """
@@ -524,6 +604,7 @@ class AsyncRedditExtractor:
             wanted: The media types to keep.
             storage: The storage backend to write to.
             dry_run: If True, resolve everything but write nothing.
+            post_filter: Predicates a post must satisfy to be kept, or None to keep every post a handler wants.
             ev: Progress callbacks for this job.
 
         Returns:
@@ -557,6 +638,14 @@ class AsyncRedditExtractor:
                 handler = self._select_handler(post, wanted)
                 if handler is None:
                     continue
+                # Filter after handler selection, so the count reflects posts this job would
+                # otherwise have downloaded rather than every post the listing happened to hold.
+                if post_filter is not None:
+                    verdict = post_filter.rejection(post)
+                    if verdict is not None:
+                        result.posts_filtered += 1
+                        await emit(ev.on_skip, source, post.url or post.id, verdict)
+                        continue
                 try:
                     candidates = await handler.resolve(post, ctx)
                 except asyncio.CancelledError:
@@ -571,6 +660,13 @@ class AsyncRedditExtractor:
                     continue
                 if not candidates and not handler.metadata_only:
                     continue
+                # min_gallery can only be judged now: the listing card doesn't carry a gallery's size.
+                if post_filter is not None:
+                    verdict = post_filter.rejection_after_resolve(post, len(candidates))
+                    if verdict is not None:
+                        result.posts_filtered += 1
+                        await emit(ev.on_skip, source, post.url or post.id, verdict)
+                        continue
 
                 result.posts_matched += 1
                 result.posts.append(post)

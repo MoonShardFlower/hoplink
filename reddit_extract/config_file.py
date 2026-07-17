@@ -1,14 +1,13 @@
-"""Load reusable CLI settings from a TOML config file.
+"""
+Load reusable CLI settings from a TOML config file.
 
-A config file lets you store a whole run -- its sources plus any command-line
-option -- so that::
+A config file lets you store a whole run -- its sources plus any command-line option -- so that::
 
     reddit-extract --config myjob.toml
 
-replaces a long, easily-mistyped command line. The file is flat TOML whose keys
-mirror the long-form CLI options (dashes or underscores both work). It may also
-set a handful of advanced :class:`~reddit_extract.models.config.ExtractorConfig`
-knobs that have no dedicated flag (see :data:`EXTRACTOR_ONLY_KEYS`).
+Replaces a long command line. The file is flat TOML whose keys mirror the long-form CLI options  (dashes or underscores
+both work). It may also set a handful of advanced  :class:`~reddit_extract.models.config.ExtractorConfig` knobs that
+have no dedicated flag (see :data:`EXTRACTOR_ONLY_KEYS`).
 
 Example ``myjob.toml``::
 
@@ -22,14 +21,9 @@ Example ``myjob.toml``::
     locale         = "en-US"
     nav_timeout_ms = 90000
 
-Precedence at runtime is ``explicit CLI argument > config file > built-in
-default``: anything you type on the command line overrides the file. One caveat
-follows from argparse's boolean flags -- ``dry_run``, ``show`` and ``quiet`` can
-be turned *on* by a config file, but a plain command line cannot turn them back
-*off* (there are no ``--no-*`` flags yet).
-
-This module is deliberately free of any browser or Playwright import, so it can
-be unit-tested on its own.
+Precedence at runtime is ``explicit CLI argument > config file > built-in default``: anything you type on the command
+line overrides the file. One caveat follows from argparse's boolean flags -- ``dry_run``, ``show`` and ``quiet`` can
+be turned *on* by a config file, but a plain command line cannot turn them back *off* (there are no ``--no-*`` flags).
 """
 
 from __future__ import annotations
@@ -49,6 +43,7 @@ EXTRACTOR_ONLY_KEYS = frozenset(
         "locale",
         "manifest_flush_every",
         "scroll_px",
+        "retry_backoff",
         "nav_timeout_ms",
         "post_wait_timeout_ms",
         "gallery_wait_ms",
@@ -77,18 +72,16 @@ def load_config_file(
 
     Args:
         path: Path to the TOML file.
-        valid_cli_keys: The argparse destinations the caller accepts (used
-            together with :data:`EXTRACTOR_ONLY_KEYS` to reject unknown keys and
-            catch typos).
+        valid_cli_keys: The argparse destinations the caller accepts (used together with :data:`EXTRACTOR_ONLY_KEYS`
+            to reject unknown keys and catch typos).
 
     Returns:
-        A dict mapping canonical keys (underscored, aliases resolved) to their
-        values. ``sources`` is always a list; ``viewport`` is a tuple when set.
+        A dict mapping canonical keys (underscored, aliases resolved) to their values. ``sources`` is always a list;
+        ``viewport`` is a tuple when set.
 
     Raises:
-        ConfigFileError: If the file is missing, is not valid TOML, names an
-            unknown key, contains two keys that canonicalize to the same setting,
-            or gives ``sources`` a value that is not a string or list.
+        ConfigFileError: If the file is missing, is not valid TOML, names an unknown key, contains two keys that
+            canonicalize to the same setting, or gives ``sources`` a value that is not a string or list.
     """
     path = Path(path)
     try:
@@ -132,10 +125,11 @@ def load_config_file(
 
 
 def _coerce_sources(settings: dict[str, Any], path: Path) -> None:
-    """Normalize ``sources`` to a list in place.
+    """
+    Normalize ``sources`` to a list in place.
 
-    A bare string is wrapped in a one-element list; argparse stores the positional
-    as a list, and a raw string would otherwise be iterated character by character.
+    A bare string is wrapped in a one-element list; argparse stores the positional as a list, and a raw string would
+    otherwise be iterated character by character.
     """
     if "sources" not in settings:
         return

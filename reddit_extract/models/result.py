@@ -19,6 +19,7 @@ class ExtractionResult:
     dry_run: bool = False
     posts_scanned: int = 0
     posts_matched: int = 0  #: posts a handler produced media (or metadata) for
+    posts_filtered: int = 0  #: posts a handler wanted but a PostFilter rejected
     media_found: int = 0  #: candidates resolved (including known/existing)
     media_saved: int = 0  #: files actually written this run
     skipped_existing: int = 0  #: file already on disk
@@ -58,6 +59,8 @@ class ExtractionResult:
             "{} posts".format(self.posts_scanned),
             "{} matched".format(self.posts_matched),
         ]
+        if self.posts_filtered:
+            bits.append("{} filtered out".format(self.posts_filtered))
         if self.dry_run:
             bits.append("{} media found (dry run)".format(self.media_found))
         else:
@@ -87,6 +90,7 @@ class ExtractionResult:
             "dry_run": self.dry_run,
             "posts_scanned": self.posts_scanned,
             "posts_matched": self.posts_matched,
+            "posts_filtered": self.posts_filtered,
             "media_found": self.media_found,
             "media_saved": self.media_saved,
             "skipped_existing": self.skipped_existing,

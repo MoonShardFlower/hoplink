@@ -17,6 +17,8 @@ Quick start::
         print(result.summary())
 """
 
+import logging
+
 from reddit_extract.storage.manifest import Manifest
 
 from .core.browser import BrowserManager, FetchResult
@@ -42,12 +44,17 @@ from .models import (
     MediaType,
     MultiReddit,
     Post,
+    PostFilter,
     Source,
     Subreddit,
     UserProfile,
     parse_source,
 )
 from .storage import FilesystemStorage, MemoryStorage, StorageBackend
+
+# A library shouldn't configure logging for its host; this keeps the stdlib's "no handlers could be found" warning away
+# while leaving the choice to the caller. The CLI attaches a real handler for --verbose / --log-level.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __version__ = "0.1.0"
 
@@ -73,6 +80,7 @@ __all__ = [
     "MultiReddit",
     "NoPostsFoundError",
     "Post",
+    "PostFilter",
     "RedditExtractError",
     "RedditExtractor",
     "Source",

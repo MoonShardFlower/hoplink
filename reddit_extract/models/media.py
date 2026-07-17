@@ -90,7 +90,10 @@ class MediaType(enum.Flag):
         """
         Lower-case name for manifests and logs, e.g. ``"image"``.
 
-        Combined flags (which have no single name) become ``"mixed"``.
+        A combined flag renders as its composite name, e.g. ``"image|video"``. Only a flag with no
+        name at all -- the empty ``MediaType(0)`` -- falls back to ``"mixed"``. In practice neither
+        arises: a labelled media type always comes from a handler's ``media_type``, which is a
+        single flag.
         """
         return (self.name or "mixed").lower()
 
