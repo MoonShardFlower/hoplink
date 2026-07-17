@@ -1,0 +1,183 @@
+"""
+Tests for ExtractorConfig: what it normalizes and what it refuses.
+
+`test_retry` already covers the retry fields. This file covers the rest of the validation, which
+exists so a typo fails at construction rather than halfway through a long run.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from reddit_extract.models.config import DEFAULT_FORMATS, ExtractorConfig
+from reddit_extract.models.media import MediaType
+
+# -- formats ----------------------------------------------------------------
+
+
+def test_the_default_formats_are_the_common_lossy_and_lossless_ones():
+    assert ExtractorConfig().formats == DEFAULT_FORMATS
+    assert "gif" not in ExtractorConfig().formats  # opt-in, since most gifs are video
+
+
+def test_a_comma_string_becomes_a_tuple():
+    # This is what the CLI's --formats flag hands over.
+    assert ExtractorConfig(formats="jpg,png").formats == ("jpg", "png")
+
+
+def test_an_iterable_of_formats_is_kept():
+    assert ExtractorConfig(formats=["jpg", "png"]).formats == ("jpg", "png")
+
+
+def test_formats_are_lower_cased_and_trimmed():
+    assert ExtractorConfig(formats=" JPG , PnG ").formats == ("jpg", "png")
+
+
+def test_a_leading_dot_is_dropped():
+    # ".jpg" is how a person writes it; extension_of hands back "jpg".
+    assert ExtractorConfig(formats=".jpg,.png").formats == ("jpg", "png")
+
+
+def test_empty_parts_are_dropped():
+    assert ExtractorConfig(formats="jpg,,  ,png").formats == ("jpg", "png")
+
+
+def test_no_formats_at_all_is_allowed():
+    # Nothing image-like matches, but a video-only job has no use for formats.
+    assert ExtractorConfig(formats="").formats == ()
+
+
+# -- default_media_types ----------------------------------------------------
+
+
+def test_images_and_galleries_are_the_default():
+    assert ExtractorConfig().default_media_types == MediaType.IMAGE | MediaType.GALLERY
+
+
+def test_default_media_types_accept_a_comma_string():
+    config = ExtractorConfig(default_media_types="image,video")
+    assert config.default_media_types == MediaType.IMAGE | MediaType.VIDEO
+
+
+def test_default_media_types_accept_a_list():
+    assert (
+        ExtractorConfig(default_media_types=["video"]).default_media_types
+        is MediaType.VIDEO
+    )
+
+
+def test_an_unknown_default_media_type_is_rejected():
+    with pytest.raises(ValueError, match="unknown media type"):
+        ExtractorConfig(default_media_types="audio")
+
+
+# -- validation: non-negative fields ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field", ["scroll_pause", "img_delay", "max_retries", "retry_backoff"]
+)
+def test_a_negative_pacing_field_is_rejected(field):
+    with pytest.raises(ValueError, match="{} must be >= 0".format(field)):
+        ExtractorConfig(**{field: -1})
+
+
+@pytest.mark.parametrize(
+    "field", ["scroll_pause", "img_delay", "max_retries", "retry_backoff"]
+)
+def test_zero_is_allowed_for_pacing(field):
+    # Tests and local runs disable pacing entirely.
+    assert getattr(ExtractorConfig(**{field: 0}), field) == 0
+
+
+def test_gallery_wait_may_be_zero_but_not_negative():
+    assert ExtractorConfig(gallery_wait_ms=0).gallery_wait_ms == 0
+    with pytest.raises(ValueError, match="gallery_wait_ms must be >= 0"):
+        ExtractorConfig(gallery_wait_ms=-1)
+
+
+# -- validation: positive fields --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "max_stale_scrolls",
+        "scroll_px",
+        "manifest_flush_every",
+        "nav_timeout_ms",
+        "post_wait_timeout_ms",
+        "request_timeout_ms",
+    ],
+)
+def test_a_field_that_must_be_positive_rejects_zero_and_below(field):
+    # Zero would mean "never scroll", "never flush", or "time out instantly".
+    with pytest.raises(ValueError, match="{} must be >= 1".format(field)):
+        ExtractorConfig(**{field: 0})
+    with pytest.raises(ValueError, match="{} must be >= 1".format(field)):
+        ExtractorConfig(**{field: -1})
+
+
+def test_one_is_allowed_for_the_positive_fields():
+    assert ExtractorConfig(manifest_flush_every=1).manifest_flush_every == 1
+
+
+# -- defaults ---------------------------------------------------------------
+
+
+def test_the_browser_defaults_are_headless_and_profile_less():
+    config = ExtractorConfig()
+    assert config.headless is True
+    assert config.profile_dir is None
+    assert config.locale == "en-US"
+    assert config.viewport == (1366, 900)
+    assert (
+        "Chrome/" in config.user_agent
+    )  # Reddit serves the modern UI to a real-looking browser
+
+
+def test_the_output_defaults_are_conservative():
+    config = ExtractorConfig()
+    assert config.output_dir == "downloads"
+    assert config.manifest_flush_every == 1  # a crash loses at most one file's record
+    assert config.dedupe_by_hash is False  # hashing is opt-in
+
+
+def test_the_pacing_defaults_are_relaxed():
+    # Reddit throttles aggressive clients, so the defaults err slow.
+    config = ExtractorConfig()
+    assert config.scroll_pause == 2.0
+    assert config.img_delay == 0.5
+
+
+# -- replace ----------------------------------------------------------------
+
+
+def test_replace_changes_a_field():
+    assert ExtractorConfig().replace(headless=False).headless is False
+
+
+def test_replace_leaves_the_original_alone():
+    original = ExtractorConfig()
+    original.replace(headless=False)
+    assert original.headless is True
+
+
+def test_replace_keeps_the_untouched_fields():
+    replaced = ExtractorConfig(output_dir="/out").replace(headless=False)
+    assert replaced.output_dir == "/out"
+
+
+def test_replace_revalidates():
+    # dataclasses.replace re-runs __post_init__, so a bad override cannot sneak through.
+    with pytest.raises(ValueError, match="img_delay must be >= 0"):
+        ExtractorConfig().replace(img_delay=-1.0)
+
+
+def test_replace_renormalizes():
+    assert ExtractorConfig().replace(formats="JPG, .PNG").formats == ("jpg", "png")
+
+
+def test_a_config_is_frozen():
+    with pytest.raises(Exception):
+        ExtractorConfig().headless = False  # type: ignore[misc]
