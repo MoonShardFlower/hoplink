@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Iterable, Pattern, Union
 
 from .post import Post
@@ -35,8 +35,8 @@ from .post import Post
 #: A comma-separated string, an iterable of strings, or nothing.
 StrListLike = Union[str, Iterable[str], None]
 
-#: A datetime, an ISO-8601 string (``2026-01-01`` or ``2026-01-01T12:00:00Z``), or nothing.
-DateLike = Union[datetime, str, None]
+#: A datetime, a plain date, an ISO-8601 string (``2026-01-01`` or ``2026-01-01T12:00:00Z``), or nothing.
+DateLike = Union[datetime, date, str, None]
 
 
 def coerce_str_list(value: StrListLike) -> tuple[str, ...]:
@@ -61,7 +61,8 @@ def coerce_datetime(value: DateLike, *, field_name: str = "date") -> datetime | 
     Normalize a date bound into a timezone-aware UTC datetime.
 
     Args:
-        value: A datetime, an ISO-8601 string such as ``"2026-01-01"`` or ``"2026-01-01T12:00:00+00:00"``, or None.
+        value: A datetime, a plain ``date``, an ISO-8601 string such as ``"2026-01-01"`` or
+            ``"2026-01-01T12:00:00+00:00"``, or None. A date is taken as midnight on that day.
         field_name: Name used in the error message.
 
     Returns:
@@ -80,6 +81,10 @@ def coerce_datetime(value: DateLike, *, field_name: str = "date") -> datetime | 
                 "{} must be an ISO-8601 date such as 2026-01-01 or "
                 "2026-01-01T12:00:00+00:00, got {!r}".format(field_name, value)
             ) from None
+    # A TOML config file hands us a plain ``date`` for a bare ``after = 2026-01-01``, which carries no tzinfo. Every
+    # datetime is also a date, so test for the narrow type first
+    if not isinstance(value, datetime) and isinstance(value, date):
+        value = datetime(value.year, value.month, value.day)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
@@ -106,7 +111,7 @@ class PostFilter:
         flairs: Keep only posts whose link flair matches one of these (case-insensitive, exact).
         min_gallery: Keep gallery posts only when they carry at least this many images. Non-gallery
             posts are unaffected. Applied after resolve (see `rejection_after_resolve`).
-        after: Keep posts created at or after this moment (datetime or ISO-8601 string).
+        after: Keep posts created at or after this moment (datetime, date, or ISO-8601 string).
         before: Keep posts created strictly before this moment.
         skip_stickied: Drop stickied/pinned posts.
     """

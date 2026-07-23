@@ -28,6 +28,8 @@ def test_a_combined_flag_passes_through():
         ("video", MediaType.VIDEO),
         ("text", MediaType.TEXT),
         ("link", MediaType.LINK),
+        ("poll", MediaType.POLL),
+        ("crosspost", MediaType.CROSSPOST),
         ("all", MediaType.ALL),
     ],
 )
@@ -77,6 +79,8 @@ def test_all_is_every_single_type_combined():
         | MediaType.VIDEO
         | MediaType.TEXT
         | MediaType.LINK
+        | MediaType.POLL
+        | MediaType.CROSSPOST
     )
 
 
@@ -126,6 +130,7 @@ def test_a_candidate_expects_images_by_default():
     cand = MediaCandidate(url="https://i.redd.it/a.jpg", media_type=MediaType.IMAGE)
     assert cand.content_prefixes == ("image/",)
     assert cand.ext is None  # inferred from the URL at save time
+    assert cand.body is None  # a fetched candidate, not one carrying its own bytes
 
 
 # -- MediaItem.to_manifest_entry --------------------------------------------

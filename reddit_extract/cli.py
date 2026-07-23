@@ -229,7 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--types",
         default="image,gallery",
-        help="Comma-separated media types: image, gallery, video, text, link, or 'all' (default: image,gallery).",
+        help="Comma-separated media types: image, gallery, video, text, link, poll, crosspost, "
+        "or 'all' (default: image,gallery). text/poll are saved as .md documents.",
     )
     p.add_argument(
         "--out", default="downloads", help="Base output directory (default: downloads)."

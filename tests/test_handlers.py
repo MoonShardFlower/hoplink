@@ -10,9 +10,11 @@ from typing import Any, List
 
 from reddit_extract.core.context import ExtractionContext
 from reddit_extract.handlers import (
+    CrosspostHandler,
     GalleryHandler,
     ImageHandler,
     LinkImageHandler,
+    PollHandler,
     TextHandler,
     VideoHandler,
     default_handlers,
@@ -32,6 +34,31 @@ class FakeContext:
 
     def extension_of(self, url: str) -> str:
         return ExtractionContext.extension_of(url)
+
+
+class FakePageContext(FakeContext):
+    """A fuller fake: serves canned page text for handlers that visit a post page."""
+
+    def __init__(self, page_result="", formats=FORMATS) -> None:
+        super().__init__(formats)
+        self.page_result = page_result
+        self.evaluated: List[tuple[str, str, Any]] = []
+        self.skips: List[tuple[str, str]] = []
+        self.sleeps = 0
+
+    async def evaluate_on(
+        self, url: str, js: str, arg: Any = None, wait_ms: int = 0
+    ) -> Any:
+        self.evaluated.append((url, js, arg))
+        if isinstance(self.page_result, Exception):
+            raise self.page_result
+        return self.page_result
+
+    async def skip(self, url: str, reason: str) -> None:
+        self.skips.append((url, reason))
+
+    async def sleep(self) -> None:
+        self.sleeps += 1
 
 
 def post(**overrides: Any) -> Post:
@@ -116,6 +143,22 @@ async def test_a_link_to_a_disallowed_image_format_is_not_downloaded():
 # -- TextHandler ------------------------------------------------------------
 
 
+def text_post(**overrides: Any) -> Post:
+    """One harvested self post."""
+    data: dict[str, Any] = {
+        "id": "t3_t1",
+        "type": "text",
+        "permalink": "/r/tifu/comments/t1/story/",
+        "author": "bob",
+        "title": "TIFU by testing",
+        "subreddit": "r/tifu",
+        "created": "2026-07-16T11:45:34.060000+0000",
+        "score": "42",
+    }
+    data.update(overrides)
+    return Post.from_harvest(data)
+
+
 def test_text_posts_are_claimed():
     assert TextHandler().can_handle(post(type="text")) is True
 
@@ -124,14 +167,149 @@ def test_non_text_posts_are_left_alone_by_the_text_handler():
     assert TextHandler().can_handle(post(type="image")) is False
 
 
-async def test_a_text_post_produces_no_candidates():
-    assert await TextHandler().resolve(post(type="text"), FakeContext()) == []
+async def test_a_text_post_becomes_a_markdown_file():
+    ctx = FakePageContext("Here is the body of my story.")
+    candidates = await TextHandler().resolve(text_post(), ctx)
+    assert len(candidates) == 1
+    cand = candidates[0]
+    assert cand.ext == "md"
+    assert cand.media_type is MediaType.TEXT
+    assert cand.url == "https://www.reddit.com/r/tifu/comments/t1/story/"
+    doc = cand.body.decode("utf-8")
+    assert "Here is the body of my story." in doc
+    assert 'title: "TIFU by testing"' in doc
+    assert 'author: "bob"' in doc
+    assert "# TIFU by testing" in doc
 
 
-def test_the_text_handler_is_the_only_metadata_only_one():
-    # metadata_only is what lets a self post count as matched despite yielding no files.
-    assert TextHandler.metadata_only is True
-    assert [h.name for h in default_handlers() if h.metadata_only] == ["TextHandler"]
+async def test_a_text_post_body_is_read_from_its_own_page():
+    ctx = FakePageContext("body")
+    p = text_post()
+    await TextHandler().resolve(p, ctx)
+    url, _js, arg = ctx.evaluated[0]
+    assert url == p.url
+    assert arg == p.id  # scopes the body read to the main post
+
+
+async def test_a_text_post_with_no_body_still_records_its_metadata():
+    ctx = FakePageContext("")  # empty self-text (title-only post)
+    cand = (await TextHandler().resolve(text_post(), ctx))[0]
+    doc = cand.body.decode("utf-8")
+    assert 'title: "TIFU by testing"' in doc
+
+
+async def test_a_failed_page_visit_still_yields_a_metadata_document():
+    # One unreachable post must not lose the record; the body is just empty.
+    ctx = FakePageContext(RuntimeError("Timeout"))
+    cand = (await TextHandler().resolve(text_post(), ctx))[0]
+    assert cand.ext == "md"
+    assert 'author: "bob"' in cand.body.decode("utf-8")
+
+
+# -- PollHandler ------------------------------------------------------------
+
+
+def test_poll_posts_are_claimed():
+    assert PollHandler().can_handle(post(type="poll")) is True
+
+
+def test_non_poll_posts_are_left_alone_by_the_poll_handler():
+    assert PollHandler().can_handle(post(type="text")) is False
+
+
+async def test_a_poll_post_becomes_a_metadata_markdown_file():
+    # A poll has no downloadable media, so it is archived from what the harvest already knows.
+    cand = (
+        await PollHandler().resolve(post(type="poll", title="Best pet?"), FakeContext())
+    )[0]
+    assert cand.ext == "md"
+    assert cand.media_type is MediaType.POLL
+    assert 'title: "Best pet?"' in cand.body.decode("utf-8")
+
+
+# -- CrosspostHandler -------------------------------------------------------
+
+
+def cross_post(**overrides: Any) -> Post:
+    """One harvested crosspost."""
+    data: dict[str, Any] = {
+        "id": "t3_x1",
+        "type": "crosspost",
+        "permalink": "/r/pics/comments/x1/shared/",
+    }
+    data.update(overrides)
+    return Post.from_harvest(data)
+
+
+def test_crossposts_with_a_permalink_are_claimed():
+    assert CrosspostHandler().can_handle(cross_post()) is True
+
+
+def test_a_crosspost_with_no_permalink_is_left_alone():
+    assert CrosspostHandler().can_handle(cross_post(permalink=None)) is False
+
+
+def test_other_post_types_are_left_alone_by_the_crosspost_handler():
+    assert CrosspostHandler().can_handle(cross_post(type="image")) is False
+
+
+async def test_a_crosspost_of_an_image_is_rebuilt_to_full_resolution():
+    ctx = FakePageContext(
+        {
+            "gallery": None,
+            "packaged": None,
+            "player_src": None,
+            "content_href": "/r/aww/comments/orig/x/",
+            "img_src": "https://preview.redd.it/some-slug-v0-abc123def.jpg?width=640&s=z",
+        }
+    )
+    candidates = await CrosspostHandler().resolve(cross_post(), ctx)
+    assert [(c.url, c.media_type) for c in candidates] == [
+        ("https://i.redd.it/abc123def.jpg", MediaType.IMAGE)
+    ]
+
+
+async def test_a_crosspost_of_a_gallery_yields_every_slide():
+    carousel = (
+        "<gallery-carousel>"
+        '<img src="https://preview.redd.it/p-v0-aaaaaa1.jpg?width=640">'
+        '<img src="https://preview.redd.it/p-v0-bbbbbb2.jpg?width=640">'
+        "</gallery-carousel>"
+    )
+    ctx = FakePageContext({"gallery": carousel, "img_src": None})
+    candidates = await CrosspostHandler().resolve(cross_post(), ctx)
+    assert [c.url for c in candidates] == [
+        "https://i.redd.it/aaaaaa1.jpg",
+        "https://i.redd.it/bbbbbb2.jpg",
+    ]
+    assert all(c.media_type is MediaType.GALLERY for c in candidates)
+
+
+async def test_a_crosspost_of_a_packaged_video_yields_the_mp4():
+    packaged = (
+        '{"m":{"x":{"source":{"url":"https://v.redd.it/xyz/720.mp4",'
+        '"dimensions":{"height":720}}}}}'
+    )
+    ctx = FakePageContext(
+        {"gallery": None, "img_src": None, "packaged": packaged, "player_src": None}
+    )
+    candidates = await CrosspostHandler().resolve(cross_post(), ctx)
+    assert [(c.url, c.media_type, c.ext) for c in candidates] == [
+        ("https://v.redd.it/xyz/720.mp4", MediaType.VIDEO, "mp4")
+    ]
+
+
+async def test_a_crosspost_with_no_recognized_media_is_skipped():
+    ctx = FakePageContext({"gallery": None, "packaged": None, "img_src": None})
+    assert await CrosspostHandler().resolve(cross_post(), ctx) == []
+    assert ctx.skips and "no recognized media" in ctx.skips[0][1]
+
+
+async def test_a_failed_crosspost_page_visit_is_skipped_rather_than_raised():
+    ctx = FakePageContext(RuntimeError("Timeout 60000ms exceeded"))
+    p = cross_post()
+    assert await CrosspostHandler().resolve(p, ctx) == []
+    assert ctx.skips == [(p.url, "crosspost failed: Timeout 60000ms exceeded")]
 
 
 # -- the built-in chain -----------------------------------------------------
@@ -143,7 +321,9 @@ def test_the_default_chain_is_in_selection_order():
         GalleryHandler,
         VideoHandler,
         LinkImageHandler,
+        CrosspostHandler,
         TextHandler,
+        PollHandler,
     ]
 
 

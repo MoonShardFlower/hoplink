@@ -43,10 +43,9 @@ log = logging.getLogger(__name__)
 
 SourceLike = Union[Source, str]
 
-# JS run in the listing page: read every rendered post card's key attributes.
-# packaged-media-json (direct MP4 renditions) lives on the embedded player element, not on the post card itself.
-# `stickied` is a boolean attribute (it renders as stickied="" ), so it must be tested with hasAttribute:
-# getAttribute would hand back the empty string, which is falsy.
+# JS run in the listing page: read every rendered post card's key attributes. Packaged-media-json (direct MP4) lives on
+# the embedded player element, not on the post card itself. `stickied` is a boolean attribute (it renders as
+# stickied="" ), so it must be tested with hasAttribute: getAttribute would hand back the empty string, which is falsy.
 JS_HARVEST = """
 () => Array.from(document.querySelectorAll('shreddit-post')).map(p => {
   const titleEl = p.querySelector('[slot="title"]');
@@ -77,9 +76,9 @@ JS_HARVEST = """
 JS_IS_MODERN = "() => !!document.querySelector('shreddit-post')"
 
 # Reddit still serves some listings (notably multireddits like r/a+b) on the legacy UI. Its .thing elements carry
-# data-* attributes we map onto the same harvest shape; the granular post type is derived from those attributes.
-# The legacy markup has no data-stickied attribute -- it marks a sticky with a CSS class instead -- and spells
-# creation time as epoch milliseconds rather than the modern UI's ISO text (Post.created_at reads both).
+# data-* attributes we map onto the same harvest shape. The post type is derived from those attributes. The legacy
+# markup has no data-stickied attribute (it marks a sticky with a CSS class instead) and spells creation time as epoch
+# milliseconds rather than the modern UI's ISO text (Post.created_at reads both).
 JS_HARVEST_LEGACY = """
 () => Array.from(document.querySelectorAll('#siteTable .thing'))
   .filter(t => t.getAttribute('data-promoted') !== 'true')
@@ -111,6 +110,11 @@ JS_HARVEST_LEGACY = """
     };
   })
 """
+
+#: Advance the modern infinite feed. `page.mouse.wheel` is unreliable here. On some listings (notably user profiles).
+#: It silently fails to move the page at all (scrollY stays 0), so the feed never requests its next batch and harvest
+#: stalls after the first ~25 posts. Driving the scroll from JS moves the document directly.
+JS_SCROLL = "(px) => window.scrollBy(0, px)"
 
 #: legacy listings paginate instead of infinite-scrolling
 JS_NEXT_PAGE = """
@@ -465,7 +469,7 @@ class AsyncRedditExtractor:
             if len(harvested) >= source.limit:
                 break
             if modern:
-                await page.mouse.wheel(0, cfg.scroll_px)
+                await page.evaluate(JS_SCROLL, cfg.scroll_px)
             else:
                 next_url = await page.evaluate(JS_NEXT_PAGE)
                 if not next_url:
@@ -562,6 +566,10 @@ class AsyncRedditExtractor:
             The successful FetchResult, or an unsuccessful one if the last attempt failed, the response was
             a GIF while GIFs are disabled, or the Content-Type matched none of ``cand.content_prefixes``.
         """
+        # A handler-composed candidate carries its own bytes (e.g. a text post's Markdown document).
+        # There is nothing to fetch, retry, or Content-Type check.
+        if cand.body is not None:
+            return FetchResult(ok=True, status=200, body=cand.body)
         cfg = ctx.config
         attempts = cfg.max_retries + 1
         result = FetchResult(ok=False, error="no attempt made")

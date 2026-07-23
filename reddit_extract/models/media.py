@@ -19,8 +19,10 @@ class MediaType(enum.Flag):
         IMAGE: Single-image posts (i.redd.it).
         GALLERY: Multi-image gallery posts.
         VIDEO: v.redd.it videos and silent "gif" posts.
-        TEXT: Self posts; recorded as metadata, never downloaded.
+        TEXT: Self posts; saved as a Markdown document (title, metadata, and body).
         LINK: External link posts pointing at a direct image.
+        POLL: Poll posts; saved as a Markdown document of the post's metadata.
+        CROSSPOST: Posts that re-share another post; resolved to the shared media.
         ALL: Every media type combined.
     """
 
@@ -29,7 +31,9 @@ class MediaType(enum.Flag):
     VIDEO = enum.auto()
     TEXT = enum.auto()
     LINK = enum.auto()
-    ALL = IMAGE | GALLERY | VIDEO | TEXT | LINK
+    POLL = enum.auto()
+    CROSSPOST = enum.auto()
+    ALL = IMAGE | GALLERY | VIDEO | TEXT | LINK | POLL | CROSSPOST
 
     @classmethod
     def coerce(cls, value: MediaTypeLike) -> "MediaType":
@@ -90,10 +94,9 @@ class MediaType(enum.Flag):
         """
         Lower-case name for manifests and logs, e.g. ``"image"``.
 
-        A combined flag renders as its composite name, e.g. ``"image|video"``. Only a flag with no
-        name at all -- the empty ``MediaType(0)`` -- falls back to ``"mixed"``. In practice neither
-        arises: a labelled media type always comes from a handler's ``media_type``, which is a
-        single flag.
+        A combined flag renders as its composite name, e.g. ``"image|video"``. Only a flag with no name at all
+        (the empty ``MediaType(0)``) falls back to ``"mixed"``. In practice neither arises: a labeled media type always
+        comes from a handler's ``media_type``, which is a single flag.
         """
         return (self.name or "mixed").lower()
 
@@ -104,16 +107,20 @@ class MediaCandidate:
     A downloadable media URL resolved from a post by a handler.
 
     Attributes:
-        url: The direct media URL to download.
+        url: The direct media URL to download. When ``body`` is set, this is not fetched; it is kept only as
+            the stable key that marks the candidate as already saved on a later run.
         media_type: Which MediaType this candidate belongs to.
         ext: File extension to save under, or None to infer it from the URL.
         content_prefixes: Acceptable Content-Type prefixes; a download whose response type matches none of these is rejected.
+        body: Ready-made file contents. When present, the pipeline writes these bytes instead of fetching ``url``
+            (used for handler-composed files such as a text post's Markdown document).
     """
 
     url: str
     media_type: MediaType
     ext: str | None = None
     content_prefixes: tuple[str, ...] = ("image/",)
+    body: bytes | None = None
 
 
 @dataclass

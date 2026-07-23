@@ -35,7 +35,8 @@ class MediaHandler(abc.ABC):
 
     Attributes:
         media_type: The MediaType flag this handler serves, used for selection and filtering.
-        metadata_only: True for handlers that record a matched post but never produce files (e.g., text posts).
+        metadata_only: True for handlers that record a matched post but never produce files. No built-in handler
+            sets this (text and poll posts are saved as Markdown documents). It remains for custom handlers.
     """
 
     media_type: ClassVar[MediaType]

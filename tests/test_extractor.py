@@ -20,6 +20,7 @@ from reddit_extract.core.extractor import (
     JS_HARVEST_LEGACY,
     JS_IS_MODERN,
     JS_NEXT_PAGE,
+    JS_SCROLL,
     AsyncRedditExtractor,
 )
 from reddit_extract.events import Events
@@ -65,6 +66,7 @@ class FakePage:
         self.next_urls = list(next_urls)
         self.fail_urls = fail_urls
         self.mouse = FakeMouse()
+        self.scrolls: List[int] = []  # px passed to each JS_SCROLL of the modern feed
         self.gotos: List[str] = []
         self.waits: List[int] = []
         self.closed = False
@@ -79,6 +81,9 @@ class FakePage:
             return self.modern
         if js in (JS_HARVEST, JS_HARVEST_LEGACY):
             return self.rounds.pop(0) if len(self.rounds) > 1 else self.rounds[0]
+        if js == JS_SCROLL:
+            self.scrolls.append(arg)
+            return None
         if js == JS_NEXT_PAGE:
             return self.next_urls.pop(0) if self.next_urls else None
         return None
@@ -363,7 +368,7 @@ async def test_scrolling_stops_once_the_limit_is_reached():
     rounds = [[harvested("a")], [harvested("b")]]
     rex, _, browser = build(rounds)
     await rex.extract(Subreddit("pics", limit=1), media_types=MediaType.ALL)
-    assert browser.pages[0].mouse.wheels == []  # the first round already sufficed
+    assert browser.pages[0].scrolls == []  # the first round already sufficed
 
 
 async def test_a_round_that_overshoots_the_limit_is_truncated():
@@ -379,7 +384,7 @@ async def test_scrolling_gives_up_after_enough_stale_rounds():
     result = await rex.extract(Subreddit("pics", limit=100), media_types=MediaType.ALL)
     assert result.posts_scanned == 1
     # one scroll for the productive round, then one per stale round before giving up
-    assert len(browser.pages[0].mouse.wheels) == 3
+    assert len(browser.pages[0].scrolls) == 3
 
 
 async def test_a_fresh_round_resets_the_stale_counter():
@@ -392,10 +397,8 @@ async def test_a_fresh_round_resets_the_stale_counter():
 async def test_scrolling_uses_the_configured_distance():
     rex, _, browser = build([[harvested("a")]], max_stale_scrolls=1, scroll_px=999)
     await rex.extract(Subreddit("pics", limit=100), media_types=MediaType.ALL)
-    wheels = browser.pages[0].mouse.wheels
-    assert wheels and set(wheels) == {
-        (0, 999)
-    }  # straight down, by the configured distance
+    scrolls = browser.pages[0].scrolls
+    assert scrolls and set(scrolls) == {999}  # by the configured distance
 
 
 async def test_each_scroll_is_reported():
@@ -458,7 +461,7 @@ async def test_a_legacy_listing_follows_its_next_link():
 async def test_a_legacy_listing_never_scrolls():
     browser = FakeBrowser([[harvested("a")]], modern=False)
     await run(browser, limit=2)
-    assert browser.pages[0].mouse.wheels == []
+    assert browser.pages[0].scrolls == []
 
 
 async def test_a_legacy_listing_stops_at_its_last_page():
@@ -471,7 +474,7 @@ async def test_a_legacy_listing_stops_at_its_last_page():
 
 
 async def test_a_post_no_handler_claims_is_scanned_but_not_matched():
-    result, _, browser = await run([[harvested("p", type="poll")]], limit=1)
+    result, _, browser = await run([[harvested("p", type="unsupported")]], limit=1)
     assert result.posts_scanned == 1
     assert result.posts_matched == 0
     assert browser.fetched == []
@@ -492,16 +495,18 @@ async def test_a_post_whose_handler_yields_nothing_is_not_matched():
     assert browser.fetched == []
 
 
-async def test_a_metadata_only_post_is_matched_without_any_media():
-    # Text posts exist to be recorded, not downloaded.
+async def test_a_text_post_is_saved_as_a_markdown_document():
+    # Text posts are archived as .md (metadata header + body), not fetched from a URL.
     result, storage, browser = await run(
         [[harvested("t", type="text")]], media_types=MediaType.TEXT
     )
     assert result.posts_matched == 1
     assert [p.id for p in result.posts] == ["t"]
-    assert result.media_found == 0
-    assert browser.fetched == []
-    assert storage.files["pics"] == {}
+    assert result.media_found == 1
+    assert result.media_saved == 1
+    assert browser.fetched == []  # the bytes are composed, not downloaded
+    assert list(storage.files["pics"]) == ["0001.md"]
+    assert b"title:" in storage.files["pics"]["0001.md"]
 
 
 # -- a handler that misbehaves ----------------------------------------------
@@ -1061,7 +1066,7 @@ def test_no_handler_means_none():
     rex = AsyncRedditExtractor()
     assert (
         rex._select_handler(
-            Post.from_harvest(harvested("p", type="poll")), MediaType.ALL
+            Post.from_harvest(harvested("p", type="unsupported")), MediaType.ALL
         )
         is None
     )

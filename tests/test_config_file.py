@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,26 @@ def test_no_config_uses_defaults():
     assert args.sort == "new"
     assert args.out == "downloads"
     assert overrides == {}
+
+
+def test_bare_toml_dates_build_a_filter(tmp_path):
+    # Unquoted dates are the natural TOML spelling, and tomllib hands them over as
+    # `date` objects rather than the strings the CLI's own flags produce.
+    conf = write_toml(
+        tmp_path,
+        'sources = ["r/pics"]\nafter = 2026-01-01\nbefore = 2026-07-01\n',
+    )
+    args, _ = parse(["--config", str(conf)])
+    post_filter = cli.build_post_filter(args)
+    assert post_filter.after == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert post_filter.before == datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+
+def test_quoted_and_bare_toml_dates_agree(tmp_path):
+    """The two spellings a config file allows must land on the same instant."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    bare, _ = parse(["--config", str(write_toml(a, "after = 2026-01-01\n"))])
+    quoted, _ = parse(["--config", str(write_toml(b, 'after = "2026-01-01"\n'))])
+    assert cli.build_post_filter(bare).after == cli.build_post_filter(quoted).after

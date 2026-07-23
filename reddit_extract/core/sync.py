@@ -28,6 +28,8 @@ from .extractor import AsyncRedditExtractor, SourceLike
 T = TypeVar("T")
 
 _CLOSE_TIMEOUT = 60.0
+#: Grace period for a timed-out close to unwind once canceled, before it is abandoned outright.
+_CANCEL_TIMEOUT = 5.0
 
 
 class RedditExtractor:
@@ -129,6 +131,17 @@ class RedditExtractor:
             future.cancel()
             raise
 
+    async def _close_async(self) -> None:
+        """
+        Close the engine on the loop thread, bounding how long a stuck browser can take.
+
+        Awaiting the close *inside* a timeout keeps it part of this task, so a timeout delivers the cancellation
+        straight into it and unwinds it here. Giving up from the calling thread instead would leave the coroutine live
+        on a loop that ``close`` is about to stop leading to "Task was destroyed but it is pending!"
+        """
+        with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(self._async.close(), _CLOSE_TIMEOUT)
+
     def close(self) -> None:
         """Cancel outstanding work, close the browser, stop the loop."""
         with self._lock:
@@ -139,8 +152,8 @@ class RedditExtractor:
         for future in list(self._pending):
             future.cancel()
         try:
-            closing = asyncio.run_coroutine_threadsafe(self._async.close(), loop)
-            closing.result(timeout=_CLOSE_TIMEOUT)
+            closing = asyncio.run_coroutine_threadsafe(self._close_async(), loop)
+            closing.result(timeout=_CLOSE_TIMEOUT + _CANCEL_TIMEOUT)
         except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
             pass
         finally:

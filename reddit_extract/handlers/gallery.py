@@ -28,13 +28,47 @@ JS_GALLERY = """
 """
 
 
+# Reddit's preview host, optionally behind a CDN subdomain (e.g. ``cf.preview.redd.it``). ``external-preview.redd.it``
+# -- used for previews of *off-site* links -- deliberately does not match: those are not i.redd.it uploads.
+_PREVIEW_RE = re.compile(r"https://(?:[a-z0-9]+\.)?preview\.redd\.it/([^\s\"'<>?]+)")
+
+
+def full_res_from_preview(
+    preview_url: str, allowed_formats: Iterable[str]
+) -> str | None:
+    """
+    Reconstruct the full-resolution i.redd.it URL behind one Reddit preview URL.
+
+    Reddit renders a slide (or a crosspost's shared image) as a ``preview.redd.it`` URL whose final path token is the
+    i.redd.it media id, e.g. ``https://preview.redd.it/some-slug-v0-3ps5r77zi1ah1.jpg?width=640&...`` becomes
+    ``https://i.redd.it/3ps5r77zi1ah1.jpg``.
+
+    Args:
+        preview_url: A single preview URL (query string and all).
+        allowed_formats: Extensions to keep (others, including GIFs, are dropped).
+
+    Returns:
+        The full-resolution i.redd.it URL, or None if ``preview_url`` isn't a Reddit preview, its extension isn't
+        allowed, or its trailing token doesn't look like a media id.
+    """
+    m = _PREVIEW_RE.search(preview_url)
+    if not m:
+        return None
+    base, ext = os.path.splitext(m.group(1))
+    ext = ext.lower().lstrip(".")
+    if ext not in set(allowed_formats):  # excludes gifs / odd formats
+        return None
+    token = base.split("-")[-1]  # trailing token = media id
+    if not re.fullmatch(r"[A-Za-z0-9]{6,}", token):
+        return None
+    return "https://i.redd.it/{}.{}".format(token, ext)
+
+
 def gallery_image_urls(carousel_html: str, allowed_formats: Iterable[str]) -> List[str]:
     """
     Reconstruct full-resolution i.redd.it URLs from a gallery carousel.
 
-    Reddit renders gallery slides as ``preview.redd.it`` URLs whose final path token is the i.redd.it media id, e.g.
-    ``https://preview.redd.it/some-slug-v0-3ps5r77zi1ah1.jpg?width=640&...``
-    becomes ``https://i.redd.it/3ps5r77zi1ah1.jpg``.
+    Each slide's ``preview.redd.it`` URL is rebuilt into its original i.redd.it upload (see `full_res_from_preview`).
 
     Args:
         carousel_html: Outer HTML of the gallery carousel element.
@@ -46,18 +80,12 @@ def gallery_image_urls(carousel_html: str, allowed_formats: Iterable[str]) -> Li
     allowed = set(allowed_formats)
     urls: List[str] = []
     seen = set()
-    for m in re.finditer(r"https://preview\.redd\.it/([^\s\"'<>?]+)", carousel_html):
-        base, ext = os.path.splitext(m.group(1))
-        ext = ext.lower().lstrip(".")
-        if ext not in allowed:  # excludes gifs / odd formats
+    for m in _PREVIEW_RE.finditer(carousel_html):
+        full = full_res_from_preview(m.group(0), allowed)
+        if full is None or full in seen:
             continue
-        token = base.split("-")[-1]  # trailing token = media id
-        if not re.fullmatch(r"[A-Za-z0-9]{6,}", token):
-            continue
-        if token in seen:
-            continue
-        seen.add(token)
-        urls.append("https://i.redd.it/{}.{}".format(token, ext))
+        seen.add(full)
+        urls.append(full)
     return urls
 
 

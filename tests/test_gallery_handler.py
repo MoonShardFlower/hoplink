@@ -13,6 +13,7 @@ from reddit_extract.core.context import ExtractionContext
 from reddit_extract.handlers.gallery import (
     JS_GALLERY,
     GalleryHandler,
+    full_res_from_preview,
     gallery_image_urls,
 )
 from reddit_extract.models.config import ExtractorConfig
@@ -147,6 +148,35 @@ def test_an_empty_carousel_yields_nothing():
 def test_non_preview_hosts_are_ignored():
     html = '<gallery-carousel><img src="https://external-preview.example/x-v0-aaaaaa1.jpg"></gallery-carousel>'
     assert gallery_image_urls(html, FORMATS) == []
+
+
+# -- full_res_from_preview: one URL at a time (shared with crossposts) -------
+
+
+def test_a_single_preview_url_is_rebuilt():
+    url = "https://preview.redd.it/some-photo-v0-3ps5r77zi1ah1.jpg?width=640&s=x"
+    assert full_res_from_preview(url, FORMATS) == "https://i.redd.it/3ps5r77zi1ah1.jpg"
+
+
+def test_a_cdn_subdomain_preview_url_is_still_rebuilt():
+    # Crossposts render the shared image from a CDN mirror like cf.preview.redd.it.
+    url = "https://cf.preview.redd.it/slug-v0-abc123def.jpg?width=320&auto=webp"
+    assert full_res_from_preview(url, FORMATS) == "https://i.redd.it/abc123def.jpg"
+
+
+def test_an_external_preview_host_is_not_mistaken_for_reddits():
+    # external-preview.redd.it hosts previews of *off-site* links, not i.redd.it uploads.
+    url = "https://external-preview.redd.it/slug-v0-abc123def.jpg?width=320"
+    assert full_res_from_preview(url, FORMATS) is None
+
+
+def test_a_non_preview_url_yields_none():
+    assert full_res_from_preview("https://i.imgur.com/a.jpg", FORMATS) is None
+
+
+def test_a_preview_url_in_a_disallowed_format_yields_none():
+    url = "https://preview.redd.it/slug-v0-abc123def.gif?width=640"
+    assert full_res_from_preview(url, FORMATS) is None
 
 
 # -- can_handle -------------------------------------------------------------

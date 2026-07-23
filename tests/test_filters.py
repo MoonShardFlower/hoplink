@@ -6,7 +6,7 @@ Browser-free: The harvest dicts mirror the shapes Reddit really serves.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -92,6 +92,21 @@ def test_coerce_datetime_forms():
         2026, 1, 1, tzinfo=timezone.utc
     )
     assert coerce_datetime(None) is None
+
+
+def test_coerce_datetime_accepts_a_plain_date():
+    # tomllib yields a date (not a datetime) for a bare `after = 2026-01-01` in a
+    # config file; it used to reach .tzinfo and crash with an AttributeError.
+    assert coerce_datetime(date(2026, 1, 1)) == datetime(
+        2026, 1, 1, tzinfo=timezone.utc
+    )
+
+
+def test_coerce_datetime_keeps_the_time_off_a_datetime():
+    # A datetime is also a date, so the date branch must not truncate it to midnight.
+    assert coerce_datetime(
+        datetime(2026, 1, 1, 12, 30, tzinfo=timezone.utc)
+    ) == datetime(2026, 1, 1, 12, 30, tzinfo=timezone.utc)
 
 
 def test_coerce_datetime_rejects_garbage():
