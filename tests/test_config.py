@@ -143,6 +143,12 @@ def test_the_output_defaults_are_conservative():
     assert config.dedupe_by_hash is False  # hashing is opt-in
 
 
+def test_redgifs_scrape_all_is_off_by_default():
+    assert ExtractorConfig().redgifs_scrape_all is False
+    assert ExtractorConfig(redgifs_scrape_all=True).redgifs_scrape_all is True
+    assert ExtractorConfig().replace(redgifs_scrape_all=True).redgifs_scrape_all is True
+
+
 def test_the_pacing_defaults_are_relaxed():
     # Reddit throttles aggressive clients, so the defaults err slow.
     config = ExtractorConfig()

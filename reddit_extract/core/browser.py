@@ -168,7 +168,12 @@ class BrowserManager:
             except Exception:
                 pass
 
-    async def fetch(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def fetch(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
         """
         GET a URL through the browser context (cookies, UA, and all).
 
@@ -178,6 +183,7 @@ class BrowserManager:
         Args:
             url: The URL to fetch.
             timeout_ms: Request timeout; defaults to ``config.request_timeout_ms``.
+            headers: Extra request headers (e.g. an ``Authorization`` bearer), merged over the context's own.
 
         Returns:
             The fetch outcome.
@@ -190,8 +196,12 @@ class BrowserManager:
         timeout = (
             timeout_ms if timeout_ms is not None else self._config.request_timeout_ms
         )
+        # Only pass headers when given, so the common call stays get(url, timeout=...).
+        kwargs: dict[str, Any] = {"timeout": timeout}
+        if headers:
+            kwargs["headers"] = headers
         try:
-            resp = await self._context.request.get(url, timeout=timeout)
+            resp = await self._context.request.get(url, **kwargs)
         except Exception as exc:
             return FetchResult(ok=False, error="error: {}".format(exc))
         try:

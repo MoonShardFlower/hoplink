@@ -106,6 +106,21 @@ def test_max_retries_flag():
     assert parse(["r/pics", "--max-retries", "5"]).max_retries == 5
 
 
+# -- redgifs scrape-all ----------------------------------------------------
+
+
+def test_redgifs_scrape_all_defaults_off_and_flips_on():
+    assert parse(["r/pics"]).redgifs_scrape_all is False
+    assert parse(["r/pics", "--redgifs-scrape-all"]).redgifs_scrape_all is True
+
+
+def test_redgifs_scrape_all_is_accepted_in_a_config_file(tmp_path):
+    conf = write_toml(tmp_path, 'sources = ["r/gifs"]\nredgifs_scrape_all = true\n')
+    parser = cli.build_parser()
+    cli._load_cli_config(parser, ["--config", str(conf)])
+    assert parser.parse_args(["--config", str(conf)]).redgifs_scrape_all is True
+
+
 def test_negative_max_retries_exits_2(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["r/pics", "--max-retries", "-1"])
@@ -308,6 +323,24 @@ def test_main_reports_filtered_posts(fake_reddit, tmp_path):
 def test_main_without_filters_keeps_everything(fake_reddit, tmp_path):
     code = cli.main(
         ["r/pics", "--limit", "3", "--out", str(tmp_path / "out"), "--img-delay", "0"]
+    )
+    assert code == 0
+    assert len(fake_reddit.fetched) == 3
+
+
+def test_main_accepts_redgifs_scrape_all(fake_reddit, tmp_path):
+    # The canned posts are images, so the flag just opts video in and the run still succeeds.
+    code = cli.main(
+        [
+            "r/pics",
+            "--limit",
+            "3",
+            "--out",
+            str(tmp_path / "out"),
+            "--img-delay",
+            "0",
+            "--redgifs-scrape-all",
+        ]
     )
     assert code == 0
     assert len(fake_reddit.fetched) == 3

@@ -255,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip a download whose content hash matches a file already saved for the source (catches reposts).",
     )
+    p.add_argument(
+        "--redgifs-scrape-all",
+        action="store_true",
+        help="For each RedGIFs post, scrape the uploader's entire RedGIFs profile, not just the "
+        "linked clip. Each profile is scraped at most once per run. Implies --types video.",
+    )
     _add_filter_arguments(p)
     p.add_argument(
         "--concurrency",
@@ -538,6 +544,9 @@ def main(argv: List[str] | None = None) -> int:
         parser.error(str(exc))
     if not media_types:
         parser.error("--types must name at least one media type")
+    # RedGIFs clips are video; scraping profiles is pointless if video isn't wanted, so opt it in.
+    if args.redgifs_scrape_all:
+        media_types |= MediaType.VIDEO
 
     try:
         post_filter = build_post_filter(args)
@@ -566,6 +575,7 @@ def main(argv: List[str] | None = None) -> int:
             max_stale_scrolls=args.max_stale_scrolls,
             max_retries=args.max_retries,
             dedupe_by_hash=args.dedupe,
+            redgifs_scrape_all=args.redgifs_scrape_all,
             # Advanced knobs a config file may set (viewport, locale, timeouts, ...).
             # Empty for a plain command line. None overlaps the keywords above.
             **extractor_overrides,

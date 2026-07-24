@@ -98,7 +98,12 @@ class FakeBrowser:
     async def wait_for_posts(self, page: Any, timeout_ms: int) -> bool:
         return True
 
-    async def fetch(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def fetch(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
         self.fetched.append(url)
         return JPEG
 

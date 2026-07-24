@@ -56,6 +56,7 @@ class FakeBrowser:
         self.page_result = page_result
         self.pages: List[FakePage] = []
         self.fetches: List[tuple[str, int | None]] = []
+        self.fetch_headers: List[dict[str, str] | None] = []
         self.playwright_context = object()
 
     async def new_page(self) -> FakePage:
@@ -63,8 +64,14 @@ class FakeBrowser:
         self.pages.append(page)
         return page
 
-    async def fetch(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def fetch(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
         self.fetches.append((url, timeout_ms))
+        self.fetch_headers.append(headers)
         return self.result
 
 
@@ -179,6 +186,16 @@ async def test_fetch_goes_through_the_browser_with_the_configured_timeout():
     ctx, browser, _ = build(request_timeout_ms=9999)
     assert await ctx.fetch("https://i.redd.it/a.jpg") == JPEG
     assert browser.fetches == [("https://i.redd.it/a.jpg", 9999)]
+    assert browser.fetch_headers == [None]  # no headers unless a handler asks
+
+
+async def test_fetch_forwards_request_headers():
+    # A handler resolving a third-party API (e.g. RedGIFs) passes a bearer token through.
+    ctx, browser, _ = build()
+    await ctx.fetch(
+        "https://api.redgifs.com/v2/gifs/x", headers={"Authorization": "Bearer t"}
+    )
+    assert browser.fetch_headers == [{"Authorization": "Bearer t"}]
 
 
 # -- skip -------------------------------------------------------------------

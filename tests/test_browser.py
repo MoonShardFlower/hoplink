@@ -58,9 +58,13 @@ class FakeRequestAPI:
         self.response = response if response is not None else FakeResponse()
         self.error = error
         self.calls: List[tuple[str, Any]] = []
+        self.headers: List[dict[str, str] | None] = []
 
-    async def get(self, url: str, timeout: Any = None) -> FakeResponse:
+    async def get(
+        self, url: str, timeout: Any = None, headers: dict[str, str] | None = None
+    ) -> FakeResponse:
         self.calls.append((url, timeout))
+        self.headers.append(headers)
         if self.error is not None:
             raise self.error
         return self.response
@@ -517,3 +521,21 @@ async def test_an_explicit_timeout_overrides_the_configured_one():
         "https://x/a.jpg", 50
     )
     assert api.calls == [("https://x/a.jpg", 50)]
+
+
+# -- fetch: headers ---------------------------------------------------------
+
+
+async def test_no_headers_are_passed_by_default():
+    # The common call must stay get(url, timeout=...); nothing extra reaches Playwright.
+    api = FakeRequestAPI()
+    await started(FakeContext(api)).fetch("https://x/a.jpg")
+    assert api.headers == [None]
+
+
+async def test_request_headers_are_forwarded_when_given():
+    api = FakeRequestAPI()
+    await started(FakeContext(api)).fetch(
+        "https://api.redgifs.com/v2/gifs/x", headers={"Authorization": "Bearer t"}
+    )
+    assert api.headers == [{"Authorization": "Bearer t"}]

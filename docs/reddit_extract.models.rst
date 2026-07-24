@@ -12,6 +12,14 @@ reddit\_extract.models.config module
    :show-inheritance:
    :undoc-members:
 
+reddit\_extract.models.filters module
+-------------------------------------
+
+.. automodule:: reddit_extract.models.filters
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 reddit\_extract.models.media module
 -----------------------------------
 

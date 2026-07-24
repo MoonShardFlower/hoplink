@@ -15,6 +15,7 @@ from reddit_extract.handlers import (
     ImageHandler,
     LinkImageHandler,
     PollHandler,
+    RedGifsHandler,
     TextHandler,
     VideoHandler,
     default_handlers,
@@ -319,6 +320,7 @@ def test_the_default_chain_is_in_selection_order():
     assert [type(h) for h in default_handlers()] == [
         ImageHandler,
         GalleryHandler,
+        RedGifsHandler,
         VideoHandler,
         LinkImageHandler,
         CrosspostHandler,
@@ -332,6 +334,14 @@ def test_the_link_handler_comes_after_the_specific_ones():
     order = [type(h) for h in default_handlers()]
     assert order.index(LinkImageHandler) > order.index(ImageHandler)
     assert order.index(LinkImageHandler) > order.index(VideoHandler)
+
+
+def test_redgifs_outranks_video_and_link():
+    # A RedGIFs post must be claimed by RedGifsHandler (which recovers audio), not
+    # by a silent v.redd.it rehost or the external-link catch-all.
+    order = [type(h) for h in default_handlers()]
+    assert order.index(RedGifsHandler) < order.index(VideoHandler)
+    assert order.index(RedGifsHandler) < order.index(LinkImageHandler)
 
 
 def test_each_call_hands_out_fresh_instances():

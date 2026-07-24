@@ -28,6 +28,9 @@ class ExtractorConfig:
     formats: tuple[str, ...] = DEFAULT_FORMATS
     #: media types extracted when a call doesn't specify any
     default_media_types: MediaType = MediaType.IMAGE | MediaType.GALLERY
+    #: when a RedGIFs post is found, scrape the uploader's whole RedGIFs profile instead of just the linked clip.
+    # Each profile is scraped at most once per run (a repeat uploader in the same listing is skipped, not re-scraped).
+    redgifs_scrape_all: bool = False
 
     # -- browser --------------------------------------------------------
     headless: bool = True

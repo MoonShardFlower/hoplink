@@ -7,6 +7,7 @@ from .image import ImageHandler
 from .link import LinkImageHandler
 from .markdown import post_to_markdown
 from .poll import PollHandler
+from .redgifs import RedGifsHandler
 from .text import TextHandler
 from .video import VideoHandler
 
@@ -16,6 +17,7 @@ def default_handlers() -> List[MediaHandler]:
     return [
         ImageHandler(),
         GalleryHandler(),
+        RedGifsHandler(),
         VideoHandler(),
         LinkImageHandler(),
         CrosspostHandler(),
@@ -28,6 +30,7 @@ __all__ = [
     "MediaHandler",
     "ImageHandler",
     "GalleryHandler",
+    "RedGifsHandler",
     "VideoHandler",
     "LinkImageHandler",
     "CrosspostHandler",

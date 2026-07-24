@@ -87,17 +87,22 @@ class ExtractionContext:
             await page.wait_for_timeout(wait_ms)
         return await page.evaluate(js, arg)
 
-    async def fetch(self, url: str) -> "FetchResult":
+    async def fetch(
+        self, url: str, headers: dict[str, str] | None = None
+    ) -> "FetchResult":
         """
         GET a URL through the browser context (cookies, UA, and all).
 
         Args:
             url: The URL to fetch.
+            headers: Extra request headers (e.g. an ``Authorization`` bearer for a third-party API).
 
         Returns:
             The fetch outcome, including body and content type.
         """
-        return await self._browser.fetch(url, self.config.request_timeout_ms)
+        return await self._browser.fetch(
+            url, self.config.request_timeout_ms, headers=headers
+        )
 
     async def skip(self, url: str, reason: str) -> None:
         """

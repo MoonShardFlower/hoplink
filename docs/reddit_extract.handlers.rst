@@ -36,6 +36,14 @@ reddit\_extract.handlers.link module
    :show-inheritance:
    :undoc-members:
 
+reddit\_extract.handlers.redgifs module
+---------------------------------------
+
+.. automodule:: reddit_extract.handlers.redgifs
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 reddit\_extract.handlers.text module
 ------------------------------------
 

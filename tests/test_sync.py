@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from typing import List
 
 import pytest
@@ -339,6 +340,53 @@ def test_a_hanging_browser_close_does_not_wedge_the_extractor(monkeypatch):
     browser.close = slow_close  # type: ignore[method-assign]
     extractor = RedditExtractor(browser=browser)  # type: ignore[arg-type]
     extractor.start()
+    extractor.close()
+    assert extractor._loop is None
+
+
+def test_a_hanging_browser_close_is_cancelled_not_abandoned(monkeypatch):
+    # Giving up on the close is not enough: the coroutine is still live on the loop, and
+    # stopping the loop with it pending makes asyncio log "Task was destroyed but it is
+    # pending!" on the user's stderr. close() must cancel it and let it unwind.
+    monkeypatch.setattr(sync_module, "_CLOSE_TIMEOUT", 0.05)
+    cancelled = threading.Event()
+    browser = FakeBrowser([[harvested("a")]])
+
+    async def slow_close() -> None:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    browser.close = slow_close  # type: ignore[method-assign]
+    extractor = RedditExtractor(browser=browser)  # type: ignore[arg-type]
+    extractor.start()
+    extractor.close()
+    assert cancelled.is_set(), "the abandoned close was never cancelled"
+
+
+def test_a_close_that_ignores_cancellation_is_still_abandoned(monkeypatch):
+    # The escape hatch: a close that swallows CancelledError cannot be unwound, so the outer
+    # bound gives up and abandons it rather than wedging close(). Abandoning is precisely the
+    # case asyncio logs about, and this test provokes it on purpose -- mute the loop's handler
+    # so the warning doesn't land in the suite's output as if something had gone wrong.
+    monkeypatch.setattr(sync_module, "_CLOSE_TIMEOUT", 0.05)
+    monkeypatch.setattr(sync_module, "_CANCEL_TIMEOUT", 0.05)
+    browser = FakeBrowser([[harvested("a")]])
+
+    async def stubborn_close() -> None:
+        while True:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                pass  # refuses to unwind
+
+    browser.close = stubborn_close  # type: ignore[method-assign]
+    extractor = RedditExtractor(browser=browser)  # type: ignore[arg-type]
+    extractor.start()
+    assert extractor._loop is not None
+    extractor._loop.set_exception_handler(lambda loop, context: None)
     extractor.close()
     assert extractor._loop is None
 
