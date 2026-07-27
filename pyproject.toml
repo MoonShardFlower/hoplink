@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reddit-extract"
+description = "Composable, browser-driven Reddit media extraction."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "MoonShardFlower", email = "MoonShardFlower@gmail.com" }]
+keywords = ["reddit", "scraper", "media", "download", "playwright"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Topic :: Internet",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Software Development :: Libraries",
+]
+dynamic = ["version"]
+dependencies = [
+    "playwright>=1.61.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "black>=26.5.1",
+    "isort>=8.0.1",
+    "flake8>=7.3.0",
+    "mypy>=2.1.0",
+]
+
+[project.scripts]
+reddit-extract = "reddit_extract.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/MoonShardFlower/reddit_scraper"
+Repository = "https://github.com/MoonShardFlower/reddit_scraper"
+Documentation = "https://reddit-extract.readthedocs.io/en/latest/"
+Issues = "https://github.com/MoonShardFlower/reddit_scraper/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "reddit_extract.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["reddit_extract*"]
+
+[tool.setuptools.package-data]
+reddit_extract = ["py.typed"]
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+# relative_files lets Codecov merge the coverage reports from the Windows and Linux CI jobs and map them back to the repo.
+relative_files = true
+source = ["reddit_extract"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+# playwright ships no type stubs. Don't fail on its missing imports.
+ignore_missing_imports = true
