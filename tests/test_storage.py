@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pytest
 
 from reddit_extract.storage import FilesystemStorage, Manifest, MemoryStorage
+from reddit_extract.storage import storage as storage_module
 from reddit_extract.storage.storage import MANIFEST_NAME, StorageBackend
 
 
@@ -140,6 +141,42 @@ def test_a_write_leaves_no_part_file_behind(tmp_path):
     storage = FilesystemStorage(str(tmp_path))
     storage.write("pics", "0001.jpg", b"bytes")
     assert os.listdir(tmp_path / "pics") == ["0001.jpg"]
+
+
+def test_a_write_retries_a_rename_blocked_by_another_process(tmp_path, monkeypatch):
+    # Windows raises PermissionError while an antivirus or the indexer still holds the
+    # destination open; the file is released a moment later, so the rename must retry.
+    real_replace = os.replace
+    calls = []
+
+    def flaky_replace(src, dst):
+        calls.append(src)
+        if len(calls) < 3:
+            raise PermissionError(5, "Access is denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(storage_module.os, "replace", flaky_replace)
+    monkeypatch.setattr(storage_module.time, "sleep", lambda _: None)
+
+    storage = FilesystemStorage(str(tmp_path))
+    storage.write_manifest("pics", {"items": []})
+    assert len(calls) == 3
+    assert json.loads((tmp_path / "pics" / MANIFEST_NAME).read_text()) == {"items": []}
+
+
+def test_a_rename_that_never_unblocks_raises_and_leaves_no_part_file(
+    tmp_path, monkeypatch
+):
+    def blocked_replace(src, dst):
+        raise PermissionError(5, "Access is denied")
+
+    monkeypatch.setattr(storage_module.os, "replace", blocked_replace)
+    monkeypatch.setattr(storage_module.time, "sleep", lambda _: None)
+
+    storage = FilesystemStorage(str(tmp_path))
+    with pytest.raises(PermissionError):
+        storage.write("pics", "0001.jpg", b"bytes")
+    assert os.listdir(tmp_path / "pics") == []
 
 
 def test_a_write_replaces_an_existing_file(tmp_path):

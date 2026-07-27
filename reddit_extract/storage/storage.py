@@ -6,6 +6,7 @@ import abc
 import copy
 import json
 import os
+import time
 from typing import Any, Iterable, Mapping
 
 
@@ -89,6 +90,29 @@ class MemoryStorage(StorageBackend):
 
 MANIFEST_NAME = "manifest.json"
 
+# On Windows a rename onto an existing file fails with PermissionError if any other process holds the destination open
+# (e.g., antivirus or the search indexer) Those holders let go after a few milliseconds, so retry.
+_REPLACE_ATTEMPTS = 8
+_REPLACE_BACKOFF = 0.05
+
+
+def _replace_with_retry(tmp: str, dest: str) -> None:
+    """``os.replace`` that waits out transient sharing violations, cleaning up ``tmp`` if it never succeeds."""
+    delay = _REPLACE_BACKOFF
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp, dest)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+            time.sleep(delay)
+            delay *= 2
+
 
 class FilesystemStorage(StorageBackend):
     """Writes ``<root>/<key>/<filename>`` atomically (tmp file + rename)."""
@@ -126,7 +150,7 @@ class FilesystemStorage(StorageBackend):
         tmp = dest + ".part"
         with open(tmp, "wb") as f:
             f.write(data)
-        os.replace(tmp, dest)
+        _replace_with_retry(tmp, dest)
         return os.path.abspath(dest)
 
     def read_manifest(self, key: str) -> Mapping[str, Any] | None:
@@ -147,7 +171,7 @@ class FilesystemStorage(StorageBackend):
         tmp = dest + ".part"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(payload)
-        os.replace(tmp, dest)
+        _replace_with_retry(tmp, dest)
         return os.path.abspath(dest)
 
     def location(self, key: str) -> str:
