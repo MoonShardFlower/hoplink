@@ -31,6 +31,10 @@ class ExtractorConfig:
     #: when a RedGIFs post is found, scrape the uploader's whole RedGIFs profile instead of just the linked clip.
     # Each profile is scraped at most once per run (a repeat uploader in the same listing is skipped, not re-scraped).
     redgifs_scrape_all: bool = False
+    #: RedGIFs usernames whose clips are never downloaded (comma string or iterable, case-insensitive).
+    # Posts from these RedGIFs users are skipped in both single-clip and scrape-all mode.
+    # Anonymous uploads carry no username and are not blocked by this list.
+    redgifs_blacklist: tuple[str, ...] = ()
 
     # -- browser --------------------------------------------------------
     headless: bool = True
@@ -80,6 +84,16 @@ class ExtractorConfig:
             f.strip().lower().lstrip(".") for f in formats if f and f.strip()
         )
         object.__setattr__(self, "formats", normalized)
+        blacklist: Union[str, Iterable[str], None] = self.redgifs_blacklist
+        if blacklist is None:
+            blacklist = ()
+        elif isinstance(blacklist, str):
+            blacklist = blacklist.split(",")
+        object.__setattr__(
+            self,
+            "redgifs_blacklist",
+            tuple(name.strip().lower() for name in blacklist if name and name.strip()),
+        )
         object.__setattr__(
             self, "default_media_types", MediaType.coerce(self.default_media_types)
         )

@@ -149,6 +149,26 @@ def test_redgifs_scrape_all_is_off_by_default():
     assert ExtractorConfig().replace(redgifs_scrape_all=True).redgifs_scrape_all is True
 
 
+def test_redgifs_blacklist_is_empty_by_default():
+    assert ExtractorConfig().redgifs_blacklist == ()
+
+
+def test_redgifs_blacklist_is_normalized_from_a_comma_string():
+    # Trimmed, lower-cased, blanks dropped -- so it matches parse_username's lower-cased output.
+    config = ExtractorConfig(redgifs_blacklist=" Alice , bob ,, ")
+    assert config.redgifs_blacklist == ("alice", "bob")
+
+
+def test_redgifs_blacklist_accepts_an_iterable_and_none():
+    assert ExtractorConfig(
+        redgifs_blacklist=["Spammer", "AdBot"]
+    ).redgifs_blacklist == (
+        "spammer",
+        "adbot",
+    )
+    assert ExtractorConfig(redgifs_blacklist=None).redgifs_blacklist == ()
+
+
 def test_the_pacing_defaults_are_relaxed():
     # Reddit throttles aggressive clients, so the defaults err slow.
     config = ExtractorConfig()

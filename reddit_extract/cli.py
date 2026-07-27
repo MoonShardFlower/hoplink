@@ -261,6 +261,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="For each RedGIFs post, scrape the uploader's entire RedGIFs profile, not just the "
         "linked clip. Each profile is scraped at most once per run. Implies --types video.",
     )
+    p.add_argument(
+        "--redgifs-blacklist",
+        metavar="NAMES",
+        default=None,
+        help="Comma-separated RedGIFs uploader names never to download (case-insensitive). A post "
+        "whose RedGIFs uploader is listed here is skipped, in both single-clip and scrape-all mode.",
+    )
     _add_filter_arguments(p)
     p.add_argument(
         "--concurrency",
@@ -576,6 +583,7 @@ def main(argv: List[str] | None = None) -> int:
             max_retries=args.max_retries,
             dedupe_by_hash=args.dedupe,
             redgifs_scrape_all=args.redgifs_scrape_all,
+            redgifs_blacklist=args.redgifs_blacklist,
             # Advanced knobs a config file may set (viewport, locale, timeouts, ...).
             # Empty for a plain command line. None overlaps the keywords above.
             **extractor_overrides,

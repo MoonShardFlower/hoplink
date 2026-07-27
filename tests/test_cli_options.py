@@ -121,6 +121,25 @@ def test_redgifs_scrape_all_is_accepted_in_a_config_file(tmp_path):
     assert parser.parse_args(["--config", str(conf)]).redgifs_scrape_all is True
 
 
+def test_redgifs_blacklist_defaults_none_and_takes_a_comma_list():
+    assert parse(["r/pics"]).redgifs_blacklist is None
+    assert parse(["r/pics", "--redgifs-blacklist", "Alice,Bob"]).redgifs_blacklist == (
+        "Alice,Bob"  # raw string; ExtractorConfig splits and lower-cases it
+    )
+
+
+def test_redgifs_blacklist_is_accepted_as_a_list_in_a_config_file(tmp_path):
+    conf = write_toml(
+        tmp_path, 'sources = ["r/gifs"]\nredgifs_blacklist = ["Spammer", "AdBot"]\n'
+    )
+    parser = cli.build_parser()
+    cli._load_cli_config(parser, ["--config", str(conf)])
+    assert parser.parse_args(["--config", str(conf)]).redgifs_blacklist == [
+        "Spammer",
+        "AdBot",
+    ]
+
+
 def test_negative_max_retries_exits_2(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["r/pics", "--max-retries", "-1"])
@@ -340,6 +359,26 @@ def test_main_accepts_redgifs_scrape_all(fake_reddit, tmp_path):
             "--img-delay",
             "0",
             "--redgifs-scrape-all",
+        ]
+    )
+    assert code == 0
+    assert len(fake_reddit.fetched) == 3
+
+
+def test_main_accepts_redgifs_blacklist(fake_reddit, tmp_path):
+    # The canned posts are images, so the blacklist matches nothing; this just proves the
+    # flag is wired through to ExtractorConfig (which normalizes it) without error.
+    code = cli.main(
+        [
+            "r/pics",
+            "--limit",
+            "3",
+            "--out",
+            str(tmp_path / "out"),
+            "--img-delay",
+            "0",
+            "--redgifs-blacklist",
+            "Spammer,AdBot",
         ]
     )
     assert code == 0

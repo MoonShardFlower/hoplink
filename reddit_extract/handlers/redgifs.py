@@ -20,6 +20,9 @@ RedGIFs profile is paged (``/v2/users/<name>/search``) so every one of their cli
 Reddit linked. Each profile is scraped at most once per run: the handler keeps an in-memory set of profiles already
 seen and skips any uploader it has handled. (The manifest still de-duplicates across runs by URL, so a later run only
 fetches new clips.)
+
+**Blacklist.** ``config.redgifs_blacklist`` If a clip's metadata names a ``userName`` on that list, the post is skipped
+before anything is downloaded. Anonymous uploads carry no username and are not blocked.
 """
 
 from __future__ import annotations
@@ -214,9 +217,10 @@ class RedGifsHandler(MediaHandler):
     ) -> List[MediaCandidate]:
         """Resolve the post's RedGIFs clip -- or, with scrape-all, its uploader's whole profile.
 
-        The clip's metadata is fetched once. In scrape-all mode its uploader is paged into many candidates (unless that
-        profile was already scraped this run), else just the one clip is returned. A clip whose token can't be issued,
-        whose lookup fails, or that exposes no usable rendition is reported via ``ctx.skip`` and yields nothing.
+        The clip's metadata is fetched once. If its uploader is on ``config.redgifs_blacklist`` the post is skipped
+        outright. Otherwise, in scrape-all mode its uploader is paged into many candidates (unless that profile was
+        already scraped this run), else just the one clip is returned. A clip whose token can't be issued, whose lookup
+        fails, or that exposes no usable rendition is reported via ``ctx.skip`` and yields nothing.
         """
         gif_id = redgifs_id(post.content_href, post.domain, post.raw.get("player_src"))
         if gif_id is None:  # pragma: no cover (can_handle already required one)
@@ -228,6 +232,12 @@ class RedGifsHandler(MediaHandler):
                 ref, "redgifs: could not resolve video for {}".format(gif_id)
             )
             return []
+
+        if ctx.config.redgifs_blacklist:
+            user = parse_username(result.body)
+            if user is not None and user in ctx.config.redgifs_blacklist:
+                await ctx.skip(ref, "redgifs: @{} is blacklisted".format(user))
+                return []
 
         if ctx.config.redgifs_scrape_all:
             profile = await self._scrape_profile(result.body, ref, ctx)
