@@ -210,6 +210,17 @@ class PostFilter:
             )
         )
 
+    @property
+    def server_side_flair(self) -> str | None:
+        """
+        The flair a listing can pre-filter on, or None when the filtering must happen here.
+
+        Reddit's subreddit listings accept one ``?f=flair_name:"..."`` filter. Whitelisting multiple flairs is not
+        possible, so multi-flair filters stay client-side. Multireddits don't support flairs (Filtering instead again
+        done client-side). `Source.listing_url` decides whether the source supports it.
+        """
+        return self.flairs[0] if len(self.flairs) == 1 else None
+
     def accepts(self, post: Post) -> bool:
         """
         Whether ``post`` satisfies every predicate set on this filter.

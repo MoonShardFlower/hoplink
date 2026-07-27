@@ -6,6 +6,7 @@ import abc
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 SUBREDDIT_SORTS = ("hot", "new", "top", "rising")
 USER_SORTS = ("hot", "new", "top", "controversial")
@@ -27,8 +28,39 @@ class Source(abc.ABC):
     def key(self) -> str:
         """Stable, filesystem-safe identifier (used as an output subdirectory)."""
 
+    def listing_url(self, *, flair: str | None = None) -> str:
+        """
+        The URL to harvest, with any server-side filtering this source supports folded in.
+
+        Args:
+            flair: A link flair to have Reddit filter for, or None.
+
+        Returns:
+            By default plain `url`: a source that can't push ``flair`` upstream returns its unfiltered listing
+            and leaves the filtering to `PostFilter`. Callers detect that by comparing the result against `url`.
+        """
+        return self.url
+
     def __str__(self) -> str:
         return self.key
+
+
+def _with_flair(url: str, flair: str | None) -> str:
+    """
+    Append Reddit's ``f=flair_name:"..."`` listing filter to ``url``.
+
+    Args:
+        url: A subreddit listing URL, which may already carry a query string (``top/?t=week``).
+        flair: The flair to filter on; an empty value returns ``url`` untouched.
+
+    Returns:
+        The filtered listing URL. Reddit matches the name case-insensitively and handles flairs containing spaces.
+        An unknown flair answers with an empty listing.
+    """
+    if not flair:
+        return url
+    sep = "&" if "?" in url else "?"
+    return url + sep + "f=" + quote('flair_name:"{}"'.format(flair), safe="")
 
 
 def _validate(sort: str, time_filter: str, limit: int, sorts: tuple[str, ...]) -> None:
@@ -89,6 +121,9 @@ class Subreddit(Source):
             return base + "top/?t=" + self.time_filter
         return base + self.sort + "/"
 
+    def listing_url(self, *, flair: str | None = None) -> str:
+        return _with_flair(self.url, flair)
+
     @property
     def key(self) -> str:
         return self.name
@@ -120,6 +155,9 @@ class MultiReddit(Source):
                 raise ValueError("invalid subreddit name {!r}".format(n))
         object.__setattr__(self, "names", names)
         _validate(self.sort, self.time_filter, self.limit, SUBREDDIT_SORTS)
+
+    # No listing_url override: Reddit serves combined listings on its legacy UI, which drops the f=flair_name filter
+    # and hands back the full listing. Multireddit's flairs are taken care of by the client-side PostFilter.
 
     @property
     def joined(self) -> str:

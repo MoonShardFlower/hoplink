@@ -232,6 +232,21 @@ def test_flair_filter_rejects_unflaired_posts():
     assert filt.accepts(make_post(flair="")) is False
 
 
+def test_a_single_flair_is_offered_to_the_listing():
+    assert PostFilter(flairs="Politics").server_side_flair == "politics"
+
+
+def test_several_flairs_stay_client_side():
+    # Reddit's listing takes one flair: a repeated ?f= applies only the first and a comma-joined
+    # pair returns nothing, so anything but a single flair has to be filtered here.
+    assert PostFilter(flairs="politics,software").server_side_flair is None
+
+
+def test_no_flair_filter_offers_nothing():
+    assert PostFilter().server_side_flair is None
+    assert PostFilter(min_score=10).server_side_flair is None
+
+
 # -- stickied --------------------------------------------------------------
 
 

@@ -87,7 +87,7 @@ def _add_filter_arguments(p: argparse.ArgumentParser) -> None:
         "--flair",
         metavar="TEXTS",
         default=None,
-        help="Comma-separated link flairs to keep (case-insensitive, exact match).",
+        help="Comma-separated link flairs to keep (case-insensitive, exact match). A single flair on a subreddit is filtered by Reddit itself, so --limit counts matching posts.",
     )
     g.add_argument(
         "--min-gallery",

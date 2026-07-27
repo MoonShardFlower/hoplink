@@ -44,6 +44,52 @@ def test_new_is_the_default_sort():
     assert Subreddit("pics").limit == 100
 
 
+# -- listing_url: the flair filter Reddit applies for us --------------------
+
+
+def test_a_listing_url_without_a_flair_is_the_plain_url():
+    sub = Subreddit("pics", sort="new")
+    assert sub.listing_url() == sub.url
+    assert sub.listing_url(flair=None) == sub.url
+    assert sub.listing_url(flair="") == sub.url
+
+
+def test_a_subreddit_pushes_the_flair_into_the_listing_query():
+    assert (
+        Subreddit("pics", sort="new").listing_url(flair="art")
+        == "https://www.reddit.com/r/pics/new/?f=flair_name%3A%22art%22"
+    )
+
+
+def test_a_flair_joins_a_url_that_already_has_a_query():
+    # top/ carries ?t=..., so the flair has to be appended with & rather than ?.
+    assert (
+        Subreddit("pics", sort="top", time_filter="week").listing_url(flair="art")
+        == "https://www.reddit.com/r/pics/top/?t=week&f=flair_name%3A%22art%22"
+    )
+
+
+def test_a_flair_containing_spaces_is_encoded():
+    assert (
+        Subreddit("pics")
+        .listing_url(flair="Daily Thread")
+        .endswith("f=flair_name%3A%22Daily%20Thread%22")
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        MultiReddit(("pics", "art")),
+        UserProfile("spez"),
+    ],
+)
+def test_sources_whose_listing_ignores_the_flair_filter_keep_their_plain_url(source):
+    # Reddit serves these on markup that drops ?f= and returns everything, so the flair must stay
+    # with the client-side PostFilter. Returning url unchanged is how the engine detects that.
+    assert source.listing_url(flair="art") == source.url
+
+
 # -- Subreddit: normalization and validation --------------------------------
 
 

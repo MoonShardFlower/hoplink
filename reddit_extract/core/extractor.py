@@ -424,7 +424,9 @@ class AsyncRedditExtractor:
                 return handler
         return None
 
-    async def _harvest(self, page: Any, source: Source, ev: Events) -> List[Post]:
+    async def _harvest(
+        self, page: Any, source: Source, ev: Events, flair: str | None = None
+    ) -> List[Post]:
         """
         Walk the listing, accumulating posts round by round.
 
@@ -436,20 +438,25 @@ class AsyncRedditExtractor:
             page: The page to drive.
             source: The source being harvested (provides URL and limit).
             ev: Progress callbacks (``on_scroll`` fires each round).
+            flair: A link flair to ask Reddit to filter the listing by, honored only by sources that support it
+                (see `Source.listing_url`). ``source.limit`` then counts matching posts rather than posts scrolled past.
 
         Returns:
             Up to ``source.limit`` posts, in listing order.
 
         Raises:
-            NoPostsFoundError: If the listing never renders any posts.
+            NoPostsFoundError: If the listing never renders any posts. A listing Reddit filtered by flair is
+                exempt: "no posts carry this flair" is an empty result, not a broken source.
         """
         cfg = self._config
-        await page.goto(
-            source.url, wait_until="domcontentloaded", timeout=cfg.nav_timeout_ms
-        )
+        url = source.listing_url(flair=flair)
+        filtered = url != source.url
+        await page.goto(url, wait_until="domcontentloaded", timeout=cfg.nav_timeout_ms)
         await self._browser.dismiss_gates(page)
         if not await self._browser.wait_for_posts(page, cfg.post_wait_timeout_ms):
-            raise NoPostsFoundError(source.url)
+            if filtered:
+                return []
+            raise NoPostsFoundError(url)
         modern = bool(await page.evaluate(JS_IS_MODERN))
         harvest_js = JS_HARVEST if modern else JS_HARVEST_LEGACY
 
@@ -638,7 +645,10 @@ class AsyncRedditExtractor:
             source=source, config=cfg, events=ev, browser=self._browser, page=page
         )
         try:
-            posts = await self._harvest(page, source, ev)
+            # Hand the flair to Reddit when both the filter and the source support it. The client-side flair
+            # check below still runs, keeping the result correct if a listing ignores ?f=.
+            flair = post_filter.server_side_flair if post_filter is not None else None
+            posts = await self._harvest(page, source, ev, flair=flair)
             result.posts_scanned = len(posts)
             await emit(ev.on_harvested, source, len(posts))
 

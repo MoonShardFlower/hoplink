@@ -28,6 +28,7 @@ from reddit_extract.exceptions import NoPostsFoundError
 from reddit_extract.handlers import ImageHandler, TextHandler
 from reddit_extract.handlers.base import MediaHandler
 from reddit_extract.models.config import ExtractorConfig
+from reddit_extract.models.filters import PostFilter
 from reddit_extract.models.media import MediaCandidate, MediaType
 from reddit_extract.models.post import Post
 from reddit_extract.models.source import Subreddit
@@ -443,6 +444,70 @@ async def test_the_no_posts_error_names_the_url_it_tried():
         await rex.extract(Subreddit("pics"), media_types=MediaType.ALL)
     assert exc.value.url == "https://www.reddit.com/r/pics/new/"
     assert "profile_dir" in str(exc.value)  # tells the user how to fix a login wall
+
+
+# -- harvesting: the flair filter Reddit applies for us ---------------------
+
+
+async def test_a_single_flair_is_pushed_into_the_listing_url():
+    # Filtering upstream means the scroll loop never has to page past the posts it would discard.
+    rex, _, browser = build([[harvested("a", flair="Art")]])
+    await rex.extract(
+        Subreddit("pics"),
+        media_types=MediaType.ALL,
+        post_filter=PostFilter(flairs="Art"),
+    )
+    assert (
+        browser.pages[0].gotos[0]
+        == "https://www.reddit.com/r/pics/new/?f=flair_name%3A%22art%22"
+    )
+
+
+async def test_several_flairs_leave_the_listing_url_alone():
+    rex, _, browser = build([[harvested("a", flair="Art")]])
+    await rex.extract(
+        Subreddit("pics"),
+        media_types=MediaType.ALL,
+        post_filter=PostFilter(flairs="art,photos"),
+    )
+    assert browser.pages[0].gotos[0] == "https://www.reddit.com/r/pics/new/"
+
+
+async def test_the_client_side_flair_check_still_runs_on_a_filtered_listing():
+    # Belt and braces: if a listing ever ignores ?f=, the wrong-flair posts must still be dropped.
+    rex, _, _ = build([[harvested("a", flair="Art"), harvested("b", flair="Other")]])
+    result = await rex.extract(
+        Subreddit("pics", limit=2),
+        media_types=MediaType.ALL,
+        post_filter=PostFilter(flairs="art"),
+    )
+    assert [p.id for p in result.posts] == ["a"]
+    assert result.posts_filtered == 1
+
+
+async def test_a_flair_filtered_listing_with_no_matches_is_empty_not_an_error():
+    # An unknown or simply unused flair renders an empty listing. That is a real answer, not a broken source.
+    browser = FakeBrowser([[]], posts_render=False)
+    rex, _, _ = build(browser)
+    result = await rex.extract(
+        Subreddit("pics"),
+        media_types=MediaType.ALL,
+        post_filter=PostFilter(flairs="nosuchflair"),
+    )
+    assert result.posts_scanned == 0
+    assert result.error is None
+
+
+async def test_an_unfiltered_listing_that_renders_nothing_still_raises():
+    # Only the flair-filtered case is exempt; a plain empty listing is still a fault worth reporting.
+    browser = FakeBrowser([[]], posts_render=False)
+    rex, _, _ = build(browser)
+    with pytest.raises(NoPostsFoundError):
+        await rex.extract(
+            Subreddit("pics"),
+            media_types=MediaType.ALL,
+            post_filter=PostFilter(flairs="art,photos"),
+        )
 
 
 # -- harvesting: the legacy-paginated UI ------------------------------------
