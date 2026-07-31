@@ -1,7 +1,7 @@
 """RedGIFs-hosted videos, resolved back to the source for their audio.
 
 Reddit routinely carries RedGIFs clips as a ``link`` card whose target is ``redgifs.com``. When Reddit rehosts one to
-``v.redd.it`` the sound the clip had on RedGIFs is lost. To preserve the sound we go to the source by resolves the
+``v.redd.it`` the sound the clip had on RedGIFs is lost. To preserve the sound we go to the source by resolving the
 post's RedGIFs id and ask RedGIFs' API for the pre-muxed MP4 (video and audio).
 
 Resolution uses RedGIFs' documented v2 API (https://github.com/Redgifs/api/wiki):
@@ -215,11 +215,11 @@ class RedGifsHandler(MediaHandler):
     async def resolve(
         self, post: Post, ctx: "ExtractionContext"
     ) -> List[MediaCandidate]:
-        """Resolve the post's RedGIFs clip -- or, with scrape-all, its uploader's whole profile.
+        """Resolve the post's RedGIFs clip or, with scrape-all, its uploader's whole profile.
 
-        The clip's metadata is fetched once. If its uploader is on ``config.redgifs_blacklist`` the post is skipped
-        outright. Otherwise, in scrape-all mode its uploader is paged into many candidates (unless that profile was
-        already scraped this run), else just the one clip is returned. A clip whose token can't be issued, whose lookup
+        The clip's metadata is fetched once. If its uploader is on ``config.redgifs_blacklist`` the post is skipped.
+        Otherwise, in scrape-all mode its uploader is paged into many candidates (unless that profile was already
+        scraped this run), else just the one clip is returned. A clip whose token can't be issued, whose lookup
         fails, or that exposes no usable rendition is reported via ``ctx.skip`` and yields nothing.
         """
         gif_id = redgifs_id(post.content_href, post.domain, post.raw.get("player_src"))
@@ -303,7 +303,7 @@ class RedGifsHandler(MediaHandler):
                 break
             page += 1
             if page <= pages:
-                await ctx.sleep()  # politeness pause between profile pages
+                await ctx.sleep(ctx.config.api_pause)
         return urls
 
     def _candidate(self, url: str) -> MediaCandidate:

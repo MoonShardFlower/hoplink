@@ -25,6 +25,7 @@ from .core.browser import BrowserManager, FetchResult
 from .core.context import ExtractionContext
 from .core.extractor import AsyncRedditExtractor
 from .core.sync import RedditExtractor
+from .core.timing import Timings
 from .events import Events
 from .exceptions import BrowserError, NoPostsFoundError, RedditExtractError
 from .handlers import (
@@ -89,6 +90,7 @@ __all__ = [
     "StorageBackend",
     "Subreddit",
     "TextHandler",
+    "Timings",
     "UserProfile",
     "VideoHandler",
     "default_handlers",

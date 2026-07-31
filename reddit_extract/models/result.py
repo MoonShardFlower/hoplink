@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from ..core.timing import Timings
 from .media import MediaItem
 from .post import Post
 from .source import Source
@@ -33,6 +34,8 @@ class ExtractionResult:
     error: str | None = None  #: set instead of raising in batch jobs
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
+    #: seconds this job spent per pipeline phase, for diagnosing a slow run
+    timings: Timings = field(default_factory=Timings)
 
     @property
     def key(self) -> str:
@@ -105,4 +108,5 @@ class ExtractionResult:
             "started_at": self.started_at.isoformat(),
             "finished_at": (self.finished_at.isoformat() if self.finished_at else None),
             "duration_seconds": self.duration,
+            "timings": self.timings.to_dict(),
         }
