@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+from contextlib import aclosing
 from datetime import datetime, timezone
 from typing import (
     Any,
@@ -38,6 +39,7 @@ from ..models.source import Source, parse_source
 from ..storage import FilesystemStorage, Manifest, StorageBackend
 from .browser import BrowserManager, FetchResult
 from .context import ExtractionContext
+from .timing import Timings
 
 log = logging.getLogger(__name__)
 
@@ -580,14 +582,19 @@ class AsyncRedditExtractor:
         cfg = ctx.config
         attempts = cfg.max_retries + 1
         result = FetchResult(ok=False, error="no attempt made")
+        wait = transfer = 0.0
         for attempt in range(1, attempts + 1):
-            result = await ctx.fetch(cand.url)
+            # media goes the direct route when it can, handlers' API calls stay on the browser where the cookies matter.
+            result = await ctx.download(cand.url)
+            wait += result.wait
+            transfer += result.transfer
+            result = result._replace(wait=wait, transfer=transfer)
             if result.ok:
                 return AsyncRedditExtractor._validate(ctx, cand, result)
             if attempt >= attempts or not AsyncRedditExtractor._is_transient(result):
                 return result
             # Back off exponentially, but never faster than the job's politeness delay.
-            delay = max(cfg.img_delay, cfg.retry_backoff * (2 ** (attempt - 1)))
+            delay = max(cfg.delay, cfg.retry_backoff * (2 ** (attempt - 1)))
             log.info(
                 "attempt %d/%d for %s failed (%s); retrying in %.1fs",
                 attempt,
@@ -598,6 +605,70 @@ class AsyncRedditExtractor:
             )
             await asyncio.sleep(delay)
         return result
+
+    @staticmethod
+    async def _download_stream(
+        ctx: ExtractionContext,
+        cands: Sequence[MediaCandidate],
+        timings: Timings,
+    ) -> AsyncGenerator[FetchResult, None]:
+        """
+        Yield each candidate's outcome in candidate order, several fetches at a time.
+
+        A pool of ``config.download_concurrency`` workers pulls from a shared cursor, so a slow file doesn't slow down
+        others. Outcomes are still handed over in candidate order, so filenames, hash de-duplication, the manifest, and
+        the event stream identical however many downloads ran at once. Memory is bounded by a lookahead. A worker
+        claims one of ``2 x window`` slots before it fetches, and a slot is released only when the caller consumed that
+        result.
+
+        Args:
+            ctx: The active extraction context.
+            cands: The candidates to fetch, in order.
+            timings: Accumulator for the network and pacing time this batch spends.
+
+        Yields:
+            One FetchResult per candidate, in the order given.
+        """
+        if not cands:
+            return
+        window = min(max(1, ctx.config.download_concurrency), len(cands))
+        lookahead = asyncio.Semaphore(2 * window)
+        outcomes: dict[int, FetchResult] = {}
+        ready = [asyncio.Event() for _ in cands]
+        cursor = iter(range(len(cands)))
+
+        async def worker() -> None:
+            # `next` on a shared iterator is atomic between awaits, so no lock is needed to hand out work.
+            for index in cursor:
+                await lookahead.acquire()
+                try:
+                    outcome = await AsyncRedditExtractor._download(ctx, cands[index])
+                except Exception as exc:
+                    log.exception("downloading %s failed", cands[index].url)
+                    outcome = FetchResult(
+                        ok=False, error="download error: {}".format(exc)
+                    )
+                timings.record("fetch_wait", outcome.wait)
+                timings.record("fetch_body", outcome.transfer)
+                if outcome.body is not None:
+                    timings.downloaded_bytes += len(outcome.body)
+                outcomes[index] = outcome
+                ready[index].set()
+                with timings.measure("pace"):
+                    await asyncio.sleep(ctx.config.delay)
+
+        workers = [asyncio.create_task(worker()) for _ in range(window)]
+        try:
+            for index in range(len(cands)):
+                # Workers claim indices in order, so the one wanted next is always running or already done.
+                await ready[index].wait()
+                outcome = outcomes.pop(index)
+                lookahead.release()
+                yield outcome
+        finally:
+            for task in workers:
+                task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
 
     async def _run_job(
         self,
@@ -627,6 +698,7 @@ class AsyncRedditExtractor:
         """
         cfg = self._config
         result = ExtractionResult(source=source, dry_run=dry_run)
+        timings = result.timings
         await emit(ev.on_job_start, source)
 
         if not dry_run:
@@ -648,7 +720,8 @@ class AsyncRedditExtractor:
             # Hand the flair to Reddit when both the filter and the source support it. The client-side flair
             # check below still runs, keeping the result correct if a listing ignores ?f=.
             flair = post_filter.server_side_flair if post_filter is not None else None
-            posts = await self._harvest(page, source, ev, flair=flair)
+            with timings.measure("harvest"):
+                posts = await self._harvest(page, source, ev, flair=flair)
             result.posts_scanned = len(posts)
             await emit(ev.on_harvested, source, len(posts))
 
@@ -665,7 +738,8 @@ class AsyncRedditExtractor:
                         await emit(ev.on_skip, source, post.url or post.id, verdict)
                         continue
                 try:
-                    candidates = await handler.resolve(post, ctx)
+                    with timings.measure("resolve"):
+                        candidates = await handler.resolve(post, ctx)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -695,8 +769,15 @@ class AsyncRedditExtractor:
                 result.media_found += len(candidates)
                 multi = len(candidates) > 1
                 index: int | None = None
+                # Plan first, download second. Allocating indices and filenames in one sequential pass keeps
+                # naming identical however many downloads later run at once, and leaves the manifest, the hash
+                # de-dupe, and the event stream to the single-threaded commit pass below.
+                planned: List[tuple[str, MediaItem, MediaCandidate]] = []
+                batch_urls: set[str] = set()
                 for part, cand in enumerate(candidates, 1):
-                    if cand.url in known:
+                    # batch_urls guards the same URL appearing twice in one post: with downloads in flight
+                    # concurrently, `known` can't yet have been updated by the first one's commit.
+                    if cand.url in known or cand.url in batch_urls:
                         result.skipped_known += 1
                         continue
                     if index is None:
@@ -720,41 +801,54 @@ class AsyncRedditExtractor:
                     if storage.exists(source.key, fname):
                         result.skipped_existing += 1
                         continue
+                    batch_urls.add(cand.url)
+                    planned.append((fname, item, cand))
 
-                    outcome = await self._download(ctx, cand)
-                    if outcome.ok and outcome.body is not None:
-                        if cfg.dedupe_by_hash:
-                            digest = hashlib.sha256(outcome.body).hexdigest()
-                            if digest in known_hashes:
-                                # Same bytes as a file already saved for this source (a repost/crosspost at a new URL).
-                                result.skipped_duplicate += 1
-                                await emit(
-                                    ev.on_skip, source, cand.url, "duplicate content"
+                plans = iter(planned)
+                stream = self._download_stream(
+                    ctx, [cand for _, _, cand in planned], timings
+                )
+                async with aclosing(stream) as outcomes:
+                    async for outcome in outcomes:
+                        fname, item, cand = next(plans)
+                        if outcome.ok and outcome.body is not None:
+                            if cfg.dedupe_by_hash:
+                                with timings.measure("hash"):
+                                    digest = hashlib.sha256(outcome.body).hexdigest()
+                                if digest in known_hashes:
+                                    result.skipped_duplicate += 1
+                                    await emit(
+                                        ev.on_skip,
+                                        source,
+                                        cand.url,
+                                        "duplicate content",
+                                    )
+                                    continue
+                                known_hashes.add(digest)
+                                item.sha256 = digest
+                            with timings.measure("write"):
+                                item.path = storage.write(
+                                    source.key, fname, outcome.body
                                 )
-                                await asyncio.sleep(cfg.img_delay)
-                                continue
-                            known_hashes.add(digest)
-                            item.sha256 = digest
-                        item.path = storage.write(source.key, fname, outcome.body)
-                        item.size = len(outcome.body)
-                        item.downloaded = True
-                        manifest.add(fname, item.to_manifest_entry())
-                        known.add(cand.url)
-                        result.items.append(item)
-                        result.media_saved += 1
-                        unflushed += 1
-                        if unflushed >= max(1, cfg.manifest_flush_every):
-                            path = storage.write_manifest(
-                                source.key, manifest.to_dict()
-                            )
-                            result.manifest_path = path or result.manifest_path
-                            unflushed = 0
-                        await emit(ev.on_media_saved, source, item)
-                    else:
-                        reason = outcome.error or "download failed"
-                        result.failures.append((cand.url, reason))
-                        await emit(ev.on_skip, source, cand.url, reason)
-                    await asyncio.sleep(cfg.img_delay)
+                            item.size = len(outcome.body)
+                            item.downloaded = True
+                            manifest.add(fname, item.to_manifest_entry())
+                            known.add(cand.url)
+                            result.items.append(item)
+                            result.media_saved += 1
+                            unflushed += 1
+                            if unflushed >= max(1, cfg.manifest_flush_every):
+                                with timings.measure("manifest"):
+                                    path = storage.write_manifest(
+                                        source.key, manifest.to_dict()
+                                    )
+                                result.manifest_path = path or result.manifest_path
+                                unflushed = 0
+                            await emit(ev.on_media_saved, source, item)
+                        else:
+                            reason = outcome.error or "download failed"
+                            result.failures.append((cand.url, reason))
+                            await emit(ev.on_skip, source, cand.url, reason)
         finally:
             await ctx.aclose()
             try:
@@ -763,9 +857,20 @@ class AsyncRedditExtractor:
                 pass
 
         if not dry_run:
-            path = storage.write_manifest(source.key, manifest.to_dict())
+            with timings.measure("manifest"):
+                path = storage.write_manifest(source.key, manifest.to_dict())
             result.manifest_path = path or result.manifest_path
         result.output_dir = storage.location(source.key)
         result.finished_at = datetime.now(timezone.utc)
+        self._log_timings(result, overlapped=cfg.download_concurrency > 1)
         await emit(ev.on_job_end, result)
         return result
+
+    @staticmethod
+    def _log_timings(result: ExtractionResult, *, overlapped: bool) -> None:
+        """Log the job's phase breakdown at info level, so ``-v`` explains where a slow run went."""
+        if not log.isEnabledFor(logging.INFO):
+            return
+        lines = result.timings.lines(wall=result.duration, overlapped=overlapped)
+        if lines:
+            log.info("[%s] %s", result.source.key, "\n".join(lines))
