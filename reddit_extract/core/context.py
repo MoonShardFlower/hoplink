@@ -104,6 +104,22 @@ class ExtractionContext:
             url, self.config.request_timeout_ms, headers=headers
         )
 
+    async def download(self, url: str) -> "FetchResult":
+        """
+        GET media bytes by whichever route is faster and works.
+
+        Prefers a direct request (carrying the browser's cookies and User-Agent) and falls back to the browser per host
+        when one refuses. Handlers should use `fetch` for API calls, where a token may be bound to the browser's
+        identity. This is for the media bytes themselves, where the browser round-trip is expensive.
+
+        Args:
+            url: The media URL to fetch.
+
+        Returns:
+            The fetch outcome, whichever route produced it.
+        """
+        return await self._browser.download(url, self.config.request_timeout_ms)
+
     async def skip(self, url: str, reason: str) -> None:
         """
         Report that ``url`` was passed over, firing the ``on_skip`` event.
@@ -114,10 +130,17 @@ class ExtractionContext:
         """
         await emit(self.events.on_skip, self.source, url, reason)
 
-    async def sleep(self) -> None:
-        """Pause for the configured ``scroll_pause`` (a politeness delay)."""
-        if self.config.scroll_pause > 0:
-            await asyncio.sleep(self.config.scroll_pause)
+    async def sleep(self, seconds: float | None = None) -> None:
+        """
+        Pause politely, by default for the configured ``scroll_pause``.
+
+        Args:
+            seconds: An explicit pause, for waits that are not scroll pacing (a handler walking pages of a
+                third-party API passes ``config.api_pause``). Zero or less does not sleep at all.
+        """
+        pause = self.config.scroll_pause if seconds is None else seconds
+        if pause > 0:
+            await asyncio.sleep(pause)
 
     @property
     def browser_context(self) -> Any:

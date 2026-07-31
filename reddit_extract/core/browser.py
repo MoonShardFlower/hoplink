@@ -9,12 +9,40 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, NamedTuple
+import time
+from typing import Any
+from urllib.parse import urlparse
 
 from ..exceptions import BrowserError
 from ..models.config import ExtractorConfig
+from .http import FetchResult, fetch_direct, looks_blocked
+from .timing import human_bytes
+
+# FetchResult lives with the HTTP layer, since both routes produce one, but it is re-exported here for convenience
+__all__ = ["GATE_BUTTON_NAMES", "BrowserManager", "FetchResult"]
 
 log = logging.getLogger(__name__)
+
+
+def _log_fetch(
+    url: str, status: int, body: bytes | None, wait: float, transfer: float
+) -> None:
+    """Log one fetch's size and split timing, the per-file view of a slow run (debug level)."""
+    if not log.isEnabledFor(logging.DEBUG):
+        return
+    size = len(body) if body else 0
+    rate = " at {:.1f} MB/s".format(size / transfer / 1_000_000) if transfer > 0 else ""
+    log.debug(
+        "fetch %s %s in %.2fs (wait %.2fs, transfer %.2fs%s) %s",
+        status,
+        human_bytes(size),
+        wait + transfer,
+        wait,
+        transfer,
+        rate,
+        url,
+    )
+
 
 GATE_BUTTON_NAMES = (
     "Accept all",
@@ -24,25 +52,6 @@ GATE_BUTTON_NAMES = (
     "View NSFW content",
     "Yes",
 )
-
-
-class FetchResult(NamedTuple):
-    """
-    Outcome of an HTTP fetch through the browser context.
-
-    Attributes:
-        ok: Whether the request succeeded (HTTP 2xx and no transport error).
-        status: HTTP status code, or 0 if the request never completed.
-        content_type: Lower-cased Content-Type without parameters.
-        body: Response bytes on success, else None.
-        error: Short error description on failure, else None.
-    """
-
-    ok: bool
-    status: int = 0
-    content_type: str = ""
-    body: bytes | None = None
-    error: str | None = None
 
 
 class BrowserManager:
@@ -61,6 +70,10 @@ class BrowserManager:
         self._browser: Any = None
         self._context: Any = None
         self._timeout_error: type[Exception] = TimeoutError
+        #: hosts that refused a direct request, so the browser is used for them from then on
+        self._browser_only: set[str] = set()
+        #: cookie header per host, so each one costs a single query to the Playwright context
+        self._cookies: dict[str, str] = {}
 
     @property
     def started(self) -> bool:
@@ -147,6 +160,76 @@ class BrowserManager:
             raise BrowserError("browser is not started")
         return await self._context.new_page()
 
+    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+        """
+        GET media bytes, preferring a direct request over the browser.
+
+        The browser is slow for large files (buffering each response, then copying it out through Playwright's driver).
+        A direct request skips that, while still carrying this context's cookies and the User-Agent.
+
+        A host returning a transport error or a "not through this route" status is retried through the browser, and
+        is blacklisted, so the wasted attempt happens only once. A 404 is not a routing problem and is reported as is.
+
+        Args:
+            url: The media URL to fetch.
+            timeout_ms: Request timeout; defaults to ``config.request_timeout_ms``.
+
+        Returns:
+            The fetch outcome, whichever route produced it.
+        """
+        timeout = (
+            timeout_ms if timeout_ms is not None else self._config.request_timeout_ms
+        )
+        host = urlparse(url).netloc.lower()
+        if not self._config.direct_download or host in self._browser_only:
+            return await self.fetch(url, timeout)
+        result = await fetch_direct(
+            url, headers=await self._direct_headers(url, host), timeout_ms=timeout
+        )
+        if not looks_blocked(result):
+            return result
+        self._browser_only.add(host)
+        log.info(
+            "%s refused a direct request (%s); using the browser for it from here on",
+            host,
+            result.error,
+        )
+        return await self.fetch(url, timeout)
+
+    async def _direct_headers(self, url: str, host: str) -> dict[str, str]:
+        """Headers for a direct request: the configured User-Agent, plus the context's cookies for the host."""
+        headers = {"User-Agent": self._config.user_agent, "Accept": "*/*"}
+        if host not in self._cookies:
+            self._cookies[host] = await self.cookie_header(url)
+        if self._cookies[host]:
+            headers["Cookie"] = self._cookies[host]
+        return headers
+
+    async def cookie_header(self, url: str) -> str:
+        """
+        The context's cookies for ``url``, as a ready-to-send ``Cookie`` header value.
+
+        Lets a download leave the browser while keeping the session (over-18 interstitial or logged-in NSFW accounts).
+
+        Args:
+            url: The URL whose cookies are wanted.
+
+        Returns:
+            ``"name=value; other=value"``,
+            or "" if the browser is not started, the context has no cookies for the URL, or Playwright refuses the query
+        """
+        if not self.started:
+            return ""
+        try:
+            cookies = await self._context.cookies(url)
+        except Exception:  # pragma: no cover (Playwright-side failure)
+            return ""
+        return "; ".join(
+            "{}={}".format(c["name"], c["value"])
+            for c in cookies
+            if c.get("name") and c.get("value") is not None
+        )
+
     async def wait_for_posts(self, page: Any, timeout_ms: int) -> bool:
         """True once post cards are rendered (modern or legacy UI), else False."""
         try:
@@ -200,24 +283,39 @@ class BrowserManager:
         kwargs: dict[str, Any] = {"timeout": timeout}
         if headers:
             kwargs["headers"] = headers
+        started = time.perf_counter()
         try:
             resp = await self._context.request.get(url, **kwargs)
         except Exception as exc:
-            return FetchResult(ok=False, error="error: {}".format(exc))
+            return FetchResult(
+                ok=False,
+                error="error: {}".format(exc),
+                wait=time.perf_counter() - started,
+            )
+        wait = time.perf_counter() - started
         try:
             ctype = (
                 (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
             )
             body = await resp.body() if resp.ok else None
+            transfer = time.perf_counter() - started - wait
+            _log_fetch(url, resp.status, body, wait, transfer)
             return FetchResult(
                 ok=resp.ok,
                 status=resp.status,
                 content_type=ctype,
                 body=body,
                 error=None if resp.ok else "HTTP {}".format(resp.status),
+                wait=wait,
+                transfer=transfer,
             )
         except Exception as exc:
-            return FetchResult(ok=False, error="error: {}".format(exc))
+            return FetchResult(
+                ok=False,
+                error="error: {}".format(exc),
+                wait=wait,
+                transfer=time.perf_counter() - started - wait,
+            )
         finally:
             # Playwright keeps response bodies in memory until the context closes unless they are disposed.
             try:

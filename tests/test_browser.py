@@ -9,7 +9,9 @@ so those tests patch the imported module and skip if it is absent. The rest inje
 
 from __future__ import annotations
 
+import logging
 import os
+from types import SimpleNamespace
 from typing import Any, List
 
 import pytest
@@ -71,17 +73,26 @@ class FakeRequestAPI:
 
 
 class FakeContext:
-    """A Playwright BrowserContext: hands out pages, tracks closure."""
+    """A Playwright BrowserContext: hands out pages, serves cookies, tracks closure."""
 
     def __init__(self, request: FakeRequestAPI | None = None) -> None:
         self.request = request if request is not None else FakeRequestAPI()
         self.pages: List[object] = []
         self.closed = False
+        self.cookie_list: List[dict[str, Any]] = []
+        self.cookie_error: Exception | None = None
+        self.cookie_queries = 0
 
     async def new_page(self) -> object:
         page = object()
         self.pages.append(page)
         return page
+
+    async def cookies(self, url: str) -> List[dict[str, Any]]:
+        self.cookie_queries += 1
+        if self.cookie_error is not None:
+            raise self.cookie_error
+        return self.cookie_list
 
     async def close(self) -> None:
         self.closed = True
@@ -163,6 +174,29 @@ def driver(monkeypatch):
         "playwright.async_api.async_playwright", lambda: FakeStarter(fake)
     )
     return fake
+
+
+@pytest.fixture
+def direct(monkeypatch):
+    """
+    Replace the direct route, so no socket is opened and its answer can be scripted.
+
+    ``urls``/``headers`` record what it was asked for; setting ``result`` makes it answer with that
+    instead of a plain success.
+    """
+    recorder = SimpleNamespace(urls=[], headers=[], result=None)
+
+    async def fake_fetch_direct(url, *, headers=None, timeout_ms):
+        recorder.urls.append(url)
+        recorder.headers.append(dict(headers or {}))
+        if recorder.result is not None:
+            return recorder.result
+        return FetchResult(
+            ok=True, status=200, content_type="video/mp4", body=b"direct"
+        )
+
+    monkeypatch.setattr("reddit_extract.core.browser.fetch_direct", fake_fetch_direct)
+    return recorder
 
 
 def started(context: FakeContext, **cfg: Any) -> BrowserManager:
@@ -435,7 +469,9 @@ async def test_fetch_before_start_raises():
 
 async def test_a_successful_fetch_carries_body_status_and_type():
     mgr = started(FakeContext(FakeRequestAPI(FakeResponse())))
-    assert await mgr.fetch("https://i.redd.it/a.jpg") == FetchResult(
+    result = await mgr.fetch("https://i.redd.it/a.jpg")
+    # The timings are wall-clock, so compare everything else.
+    assert result._replace(wait=0.0, transfer=0.0) == FetchResult(
         ok=True, status=200, content_type="image/jpeg", body=b"imagebytes", error=None
     )
 
@@ -539,3 +575,120 @@ async def test_request_headers_are_forwarded_when_given():
         "https://api.redgifs.com/v2/gifs/x", headers={"Authorization": "Bearer t"}
     )
     assert api.headers == [{"Authorization": "Bearer t"}]
+
+
+# -- cookies ----------------------------------------------------------------
+
+
+async def test_cookies_become_a_header_value():
+    context = FakeContext()
+    context.cookie_list = [
+        {"name": "over18", "value": "1"},
+        {"name": "session", "value": "abc"},
+    ]
+    assert await started(context).cookie_header("https://i.redd.it/a.jpg") == (
+        "over18=1; session=abc"
+    )
+
+
+async def test_no_cookies_is_an_empty_header():
+    assert await started(FakeContext()).cookie_header("https://i.redd.it/a.jpg") == ""
+
+
+async def test_cookies_are_empty_before_the_browser_starts():
+    mgr = BrowserManager(ExtractorConfig())
+    assert await mgr.cookie_header("https://i.redd.it/a.jpg") == ""
+
+
+async def test_a_playwright_failure_yields_no_cookies_rather_than_raising():
+    context = FakeContext()
+    context.cookie_error = RuntimeError("context closed")
+    assert await started(context).cookie_header("https://i.redd.it/a.jpg") == ""
+
+
+# -- download: picking a route ----------------------------------------------
+
+
+async def test_media_goes_direct_by_default(direct):
+    api = FakeRequestAPI()
+    result = await started(FakeContext(api)).download("https://media.redgifs.com/a.mp4")
+    assert result.body == b"direct"
+    assert direct.urls == ["https://media.redgifs.com/a.mp4"]
+    assert api.calls == []  # the browser was never asked
+
+
+async def test_the_browser_is_used_when_direct_downloads_are_off(direct):
+    api = FakeRequestAPI()
+    await started(FakeContext(api), direct_download=False).download(
+        "https://media.redgifs.com/a.mp4"
+    )
+    assert direct.urls == []
+    assert api.calls == [("https://media.redgifs.com/a.mp4", 60000)]
+
+
+async def test_a_direct_request_carries_the_user_agent_and_cookies(direct):
+    context = FakeContext()
+    context.cookie_list = [{"name": "over18", "value": "1"}]
+    await started(context, user_agent="Mozilla/5.0 test").download(
+        "https://i.redd.it/a.jpg"
+    )
+    assert direct.headers[0]["User-Agent"] == "Mozilla/5.0 test"
+    assert direct.headers[0]["Cookie"] == "over18=1"
+
+
+async def test_cookies_are_queried_once_per_host(direct):
+    context = FakeContext()
+    context.cookie_list = [{"name": "over18", "value": "1"}]
+    mgr = started(context)
+    for _ in range(3):
+        await mgr.download("https://i.redd.it/a.jpg")
+    assert context.cookie_queries == 1
+
+
+async def test_no_cookie_header_is_sent_when_there_are_none(direct):
+    await started(FakeContext()).download("https://i.redd.it/a.jpg")
+    assert "Cookie" not in direct.headers[0]
+
+
+# -- download: falling back -------------------------------------------------
+
+
+async def test_a_host_that_refuses_directly_is_retried_through_the_browser(direct):
+    direct.result = FetchResult(ok=False, status=403, error="HTTP 403")
+    api = FakeRequestAPI()
+    result = await started(FakeContext(api)).download("https://media.redgifs.com/a.mp4")
+    assert result.body == b"imagebytes"  # the browser's answer won
+    assert api.calls == [("https://media.redgifs.com/a.mp4", 60000)]
+
+
+async def test_a_refusing_host_is_only_attempted_directly_once(direct):
+    direct.result = FetchResult(ok=False, status=403, error="HTTP 403")
+    mgr = started(FakeContext(FakeRequestAPI()))
+    for _ in range(3):
+        await mgr.download("https://media.redgifs.com/a.mp4")
+    assert len(direct.urls) == 1
+
+
+async def test_the_fallback_is_remembered_per_host_not_globally(direct):
+    direct.result = FetchResult(ok=False, status=403, error="HTTP 403")
+    mgr = started(FakeContext(FakeRequestAPI()))
+    await mgr.download("https://media.redgifs.com/a.mp4")
+    direct.result = None  # this host is fine
+    await mgr.download("https://i.redd.it/a.jpg")
+    assert direct.urls == ["https://media.redgifs.com/a.mp4", "https://i.redd.it/a.jpg"]
+
+
+async def test_a_missing_file_is_reported_rather_than_retried(direct):
+    # A 404 would be a 404 in the browser too; retrying it just doubles the cost.
+    direct.result = FetchResult(ok=False, status=404, error="HTTP 404")
+    api = FakeRequestAPI()
+    result = await started(FakeContext(api)).download("https://media.redgifs.com/a.mp4")
+    assert result.status == 404
+    assert api.calls == []
+
+
+async def test_the_fallback_is_logged(direct, caplog):
+    direct.result = FetchResult(ok=False, status=403, error="HTTP 403")
+    with caplog.at_level(logging.INFO, logger="reddit_extract.core.browser"):
+        await started(FakeContext(FakeRequestAPI())).download("https://x/a.mp4")
+    assert "refused a direct request" in caplog.text
