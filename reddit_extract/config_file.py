@@ -43,6 +43,7 @@ EXTRACTOR_ONLY_KEYS = frozenset(
         "locale",
         "manifest_flush_every",
         "scroll_px",
+        "api_pause",
         "retry_backoff",
         "nav_timeout_ms",
         "post_wait_timeout_ms",

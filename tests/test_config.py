@@ -75,7 +75,7 @@ def test_an_unknown_default_media_type_is_rejected():
 
 
 @pytest.mark.parametrize(
-    "field", ["scroll_pause", "img_delay", "max_retries", "retry_backoff"]
+    "field", ["scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"]
 )
 def test_a_negative_pacing_field_is_rejected(field):
     with pytest.raises(ValueError, match="{} must be >= 0".format(field)):
@@ -83,7 +83,7 @@ def test_a_negative_pacing_field_is_rejected(field):
 
 
 @pytest.mark.parametrize(
-    "field", ["scroll_pause", "img_delay", "max_retries", "retry_backoff"]
+    "field", ["scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"]
 )
 def test_zero_is_allowed_for_pacing(field):
     # Tests and local runs disable pacing entirely.
@@ -105,6 +105,7 @@ def test_gallery_wait_may_be_zero_but_not_negative():
         "max_stale_scrolls",
         "scroll_px",
         "manifest_flush_every",
+        "download_concurrency",
         "nav_timeout_ms",
         "post_wait_timeout_ms",
         "request_timeout_ms",
@@ -173,7 +174,14 @@ def test_the_pacing_defaults_are_relaxed():
     # Reddit throttles aggressive clients, so the defaults err slow.
     config = ExtractorConfig()
     assert config.scroll_pause == 2.0
-    assert config.img_delay == 0.5
+    assert config.delay == 0.5
+    # Downloads are serial until asked otherwise.
+    assert config.download_concurrency == 1
+    # Try to download directly (outside the browser) for speedup. If refused we fall back to the browser automatically.
+    assert config.direct_download is True
+    # API paging waits on no renderer, so it is paced far more lightly than scrolling.
+    assert config.api_pause == 0.5
+    assert config.api_pause < config.scroll_pause
 
 
 # -- replace ----------------------------------------------------------------
@@ -196,8 +204,8 @@ def test_replace_keeps_the_untouched_fields():
 
 def test_replace_revalidates():
     # dataclasses.replace re-runs __post_init__, so a bad override cannot sneak through.
-    with pytest.raises(ValueError, match="img_delay must be >= 0"):
-        ExtractorConfig().replace(img_delay=-1.0)
+    with pytest.raises(ValueError, match="delay must be >= 0"):
+        ExtractorConfig().replace(delay=-1.0)
 
 
 def test_replace_renormalizes():

@@ -305,7 +305,7 @@ def test_main_applies_filters_to_a_real_run(fake_reddit, tmp_path, capsys):
             "500",
             "--title-exclude",
             "meta",
-            "--img-delay",
+            "--delay",
             "0",
             "--report",
             str(tmp_path / "report.json"),
@@ -328,7 +328,7 @@ def test_main_reports_filtered_posts(fake_reddit, tmp_path):
             str(tmp_path / "out"),
             "--min-score",
             "500",
-            "--img-delay",
+            "--delay",
             "0",
             "--report",
             str(report),
@@ -341,7 +341,7 @@ def test_main_reports_filtered_posts(fake_reddit, tmp_path):
 
 def test_main_without_filters_keeps_everything(fake_reddit, tmp_path):
     code = cli.main(
-        ["r/pics", "--limit", "3", "--out", str(tmp_path / "out"), "--img-delay", "0"]
+        ["r/pics", "--limit", "3", "--out", str(tmp_path / "out"), "--delay", "0"]
     )
     assert code == 0
     assert len(fake_reddit.fetched) == 3
@@ -356,7 +356,7 @@ def test_main_accepts_redgifs_scrape_all(fake_reddit, tmp_path):
             "3",
             "--out",
             str(tmp_path / "out"),
-            "--img-delay",
+            "--delay",
             "0",
             "--redgifs-scrape-all",
         ]
@@ -375,7 +375,7 @@ def test_main_accepts_redgifs_blacklist(fake_reddit, tmp_path):
             "3",
             "--out",
             str(tmp_path / "out"),
-            "--img-delay",
+            "--delay",
             "0",
             "--redgifs-blacklist",
             "Spammer,AdBot",
@@ -385,6 +385,85 @@ def test_main_accepts_redgifs_blacklist(fake_reddit, tmp_path):
     assert len(fake_reddit.fetched) == 3
 
 
+def test_main_accepts_download_concurrency(fake_reddit, tmp_path):
+    # The canned posts hold one image each, so the pool has nothing to overlap.
+    code = cli.main(
+        [
+            "r/pics",
+            "--limit",
+            "3",
+            "--out",
+            str(tmp_path / "out"),
+            "--delay",
+            "0",
+            "--download-concurrency",
+            "4",
+        ]
+    )
+    assert code == 0
+    assert len(fake_reddit.fetched) == 3
+
+
+def test_media_leaves_the_browser_by_default():
+    assert parse(["r/pics"]).direct_download is True
+
+
+def test_no_direct_download_forces_the_browser_route():
+    assert parse(["r/pics", "--no-direct-download"]).direct_download is False
+
+
+def test_direct_download_can_be_turned_off_from_a_config_file(
+    fake_reddit, tmp_path, monkeypatch
+):
+    # It is on by default, so unlike the other booleans this one is the config file's to *disable*.
+    seen = []
+
+    def capture(cfg):
+        seen.append(cfg)
+        return fake_reddit
+
+    monkeypatch.setattr("reddit_extract.core.extractor.BrowserManager", capture)
+    conf = write_toml(
+        tmp_path,
+        'sources = ["r/pics"]\n'
+        "limit = 3\n"
+        "delay = 0.0\n"
+        "direct_download = false\n"
+        'out = "{}"\n'.format((tmp_path / "out").as_posix()),
+    )
+    assert cli.main(["--config", str(conf)]) == 0
+    assert seen[0].direct_download is False
+
+
+def test_api_pause_reaches_the_config_from_a_config_file(
+    fake_reddit, tmp_path, monkeypatch
+):
+    # It has no CLI flag, so the config file is the only way to tune it.
+    seen = []
+
+    def capture(cfg):
+        seen.append(cfg)
+        return fake_reddit
+
+    monkeypatch.setattr("reddit_extract.core.extractor.BrowserManager", capture)
+    conf = write_toml(
+        tmp_path,
+        'sources = ["r/pics"]\n'
+        "limit = 3\n"
+        "delay = 0.0\n"
+        "api_pause = 0.25\n"
+        'out = "{}"\n'.format((tmp_path / "out").as_posix()),
+    )
+    assert cli.main(["--config", str(conf)]) == 0
+    assert seen[0].api_pause == 0.25
+
+
+def test_main_rejects_a_download_concurrency_below_one(fake_reddit, tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["r/pics", "--out", str(tmp_path), "--download-concurrency", "0"])
+    assert "download_concurrency must be >= 1" in capsys.readouterr().err
+
+
 def test_main_filters_from_a_config_file(fake_reddit, tmp_path):
     conf = write_toml(
         tmp_path,
@@ -392,7 +471,7 @@ def test_main_filters_from_a_config_file(fake_reddit, tmp_path):
         "limit = 3\n"
         "min_score = 500\n"
         'title-exclude = "meta"\n'
-        "img_delay = 0.0\n"
+        "delay = 0.0\n"
         'out = "{}"\n'.format((tmp_path / "out").as_posix()),
     )
     assert cli.main(["--config", str(conf)]) == 0

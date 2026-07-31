@@ -54,14 +54,24 @@ class ExtractorConfig:
 
     # -- pacing ---------------------------------------------------------
     scroll_pause: float = 2.0
-    img_delay: float = 0.5
+    #: seconds a downloader waits after finishing one file before taking the next
+    delay: float = 0.5
+    #: seconds between successive pages of a third-party API (e.g. RedGIFs profile paging). Separate from
+    # ``scroll_pause`` which waits for a listing to render more cards, while this one only paces JSON requests.
+    api_pause: float = 0.5
     max_stale_scrolls: int = 10
     scroll_px: int = 18000
+    #: files fetched at once within a single post's media (a gallery's images, a scraped RedGIFs profile's clips).
+    # 1 keeps downloads strictly sequential. Raising it speeds up posts that resolve to many files.
+    download_concurrency: int = 1
+    #: fetch media bytes directly instead of through the browser, carrying its cookies and User-Agent.
+    # Much faster for large files. A host that refuses a direct request falls back to the browser automatically.
+    direct_download: bool = True
 
     # -- download retries -----------------------------------------------
     #: extra attempts for a download that fails transiently (0 disables retrying)
     max_retries: int = 2
-    #: base seconds for exponential retry backoff; the wait never dips below ``img_delay``
+    #: base seconds for exponential retry backoff; the wait never dips below ``delay``
     retry_backoff: float = 1.0
 
     # -- timeouts (milliseconds) ----------------------------------------
@@ -98,12 +108,13 @@ class ExtractorConfig:
             self, "default_media_types", MediaType.coerce(self.default_media_types)
         )
         self._require_non_negative(
-            "scroll_pause", "img_delay", "max_retries", "retry_backoff"
+            "scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"
         )
         self._require_positive(
             "max_stale_scrolls",
             "scroll_px",
             "manifest_flush_every",
+            "download_concurrency",
             "nav_timeout_ms",
             "post_wait_timeout_ms",
             "request_timeout_ms",

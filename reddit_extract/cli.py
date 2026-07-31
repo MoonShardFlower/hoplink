@@ -282,10 +282,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between feed scrolls (default: 2.0).",
     )
     p.add_argument(
-        "--img-delay",
+        "--delay",
         type=float,
         default=0.5,
-        help="Seconds between downloads (default: 0.5).",
+        help="Seconds a downloader waits between files (default: 0.5).",
+    )
+    p.add_argument(
+        "--download-concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Files downloaded at once within one post (a gallery's images, or a scraped RedGIFs "
+        "profile's clips (default: 1). Does not parallelize across posts.",
+    )
+    p.add_argument(
+        "--no-direct-download",
+        dest="direct_download",
+        action="store_false",
+        help="Route media through the browser instead of fetching it directly. Much slower for large files."
+        "Note that direct requests automatically fall back to the browser should the host refuse direct download.",
     )
     p.add_argument(
         "--max-stale-scrolls",
@@ -578,7 +593,9 @@ def main(argv: List[str] | None = None) -> int:
             user_agent=args.user_agent,
             output_dir=args.out,
             scroll_pause=args.scroll_pause,
-            img_delay=args.img_delay,
+            delay=args.delay,
+            download_concurrency=args.download_concurrency,
+            direct_download=args.direct_download,
             max_stale_scrolls=args.max_stale_scrolls,
             max_retries=args.max_retries,
             dedupe_by_hash=args.dedupe,

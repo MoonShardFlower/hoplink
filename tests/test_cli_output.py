@@ -438,14 +438,14 @@ def test_a_failed_source_exits_one(monkeypatch, tmp_path):
         "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
     )
     assert (
-        cli.main(["r/pics", "--limit", "1", "--out", str(tmp_path), "--img-delay", "0"])
+        cli.main(["r/pics", "--limit", "1", "--out", str(tmp_path), "--delay", "0"])
         == 1
     )
 
 
 def test_a_successful_run_exits_zero(fake_reddit, tmp_path):
     assert (
-        cli.main(["r/pics", "--limit", "2", "--out", str(tmp_path), "--img-delay", "0"])
+        cli.main(["r/pics", "--limit", "2", "--out", str(tmp_path), "--delay", "0"])
         == 0
     )
 
@@ -464,7 +464,7 @@ def test_an_unwritable_report_exits_one(fake_reddit, tmp_path, capsys):
             "2",
             "--out",
             str(tmp_path / "o"),
-            "--img-delay",
+            "--delay",
             "0",
             "--report",
             str(report),
@@ -483,7 +483,7 @@ def test_a_written_report_is_announced(fake_reddit, tmp_path, capsys):
             "2",
             "--out",
             str(tmp_path / "o"),
-            "--img-delay",
+            "--delay",
             "0",
             "--report",
             str(report),
@@ -496,13 +496,13 @@ def test_a_written_report_is_announced(fake_reddit, tmp_path, capsys):
 
 
 def test_a_single_source_gets_no_batch_tally(fake_reddit, tmp_path, capsys):
-    cli.main(["r/pics", "--limit", "2", "--out", str(tmp_path), "--img-delay", "0"])
+    cli.main(["r/pics", "--limit", "2", "--out", str(tmp_path), "--delay", "0"])
     assert "Batch finished" not in out(capsys)
 
 
 def test_several_sources_are_tallied(fake_reddit, tmp_path, capsys):
     cli.main(
-        ["r/pics", "r/art", "--limit", "2", "--out", str(tmp_path), "--img-delay", "0"]
+        ["r/pics", "r/art", "--limit", "2", "--out", str(tmp_path), "--delay", "0"]
     )
     printed = out(capsys)
     assert "Batch finished: 2 sources, 4 new files." in printed
@@ -519,7 +519,7 @@ def test_a_dry_run_batch_tallies_what_it_would_download(fake_reddit, tmp_path, c
             "2",
             "--out",
             str(tmp_path),
-            "--img-delay",
+            "--delay",
             "0",
             "--dry-run",
         ]
@@ -533,7 +533,7 @@ def test_a_batch_tally_flags_failed_sources(monkeypatch, tmp_path, capsys):
         "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
     )
     code = cli.main(
-        ["r/pics", "r/art", "--limit", "1", "--out", str(tmp_path), "--img-delay", "0"]
+        ["r/pics", "r/art", "--limit", "1", "--out", str(tmp_path), "--delay", "0"]
     )
     printed = out(capsys)
     assert code == 1
