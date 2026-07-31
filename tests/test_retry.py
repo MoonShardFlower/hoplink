@@ -1,8 +1,8 @@
 """
 Tests for the bounded download retry.
 
-Browser-free: `_download` only touches ``ctx.fetch``, ``ctx.config`` and ``ctx.formats``. A small fake context
-exercises the whole policy.
+Browser-free: `_download` only touches ``ctx.download``, ``ctx.config`` and ``ctx.formats``. A small fake
+context exercises the whole policy.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class FakeContext:
         self.formats = frozenset(formats)
         self.fetches: list[str] = []
 
-    async def fetch(self, url: str) -> FetchResult:
+    async def download(self, url: str) -> FetchResult:
         self.fetches.append(url)
         # Once the script runs out, keep returning its final outcome.
         return self._results.pop(0) if len(self._results) > 1 else self._results[0]
@@ -170,17 +170,17 @@ async def test_non_image_candidate_accepts_its_own_content_type(no_sleep):
 async def test_backoff_grows_exponentially(no_sleep):
     ctx = FakeContext(
         [FetchResult(ok=False, status=503, error="HTTP 503")],
-        config=ExtractorConfig(max_retries=3, retry_backoff=1.0, img_delay=0.0),
+        config=ExtractorConfig(max_retries=3, retry_backoff=1.0, delay=0.0),
     )
     await download(ctx)
     assert no_sleep == [1.0, 2.0, 4.0]
 
 
-async def test_backoff_never_dips_below_img_delay(no_sleep):
-    # img_delay is the job's politeness floor; a small retry_backoff must not undercut it.
+async def test_backoff_never_dips_below_delay(no_sleep):
+    # delay is the job's politeness floor; a small retry_backoff must not undercut it.
     ctx = FakeContext(
         [FetchResult(ok=False, status=503, error="HTTP 503")],
-        config=ExtractorConfig(max_retries=2, retry_backoff=0.01, img_delay=2.0),
+        config=ExtractorConfig(max_retries=2, retry_backoff=0.01, delay=2.0),
     )
     await download(ctx)
     assert no_sleep == [2.0, 2.0]
@@ -189,7 +189,7 @@ async def test_backoff_never_dips_below_img_delay(no_sleep):
 async def test_no_sleep_after_the_final_attempt(no_sleep):
     ctx = FakeContext(
         [FetchResult(ok=False, status=503, error="HTTP 503")],
-        config=ExtractorConfig(max_retries=1, retry_backoff=1.0, img_delay=0.0),
+        config=ExtractorConfig(max_retries=1, retry_backoff=1.0, delay=0.0),
     )
     await download(ctx)
     assert len(no_sleep) == 1  # waits between attempts only, not after the last one

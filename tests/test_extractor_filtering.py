@@ -92,6 +92,10 @@ class FakeBrowser:
     async def new_page(self) -> FakePage:
         return FakePage(self.records)
 
+    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+        # The real manager may route this straight out to the network; a fake has only the one route.
+        return await self.fetch(url, timeout_ms)
+
     async def dismiss_gates(self, page: Any) -> None:
         pass
 
@@ -134,7 +138,7 @@ def build(records, post_filter=None, handlers=None, **cfg_kwargs):
     """An extractor wired to fake infrastructure, plus its storage and browser."""
     storage = MemoryStorage()
     browser = FakeBrowser(records)
-    config = ExtractorConfig(img_delay=0.0, scroll_pause=0.0, **cfg_kwargs)
+    config = ExtractorConfig(delay=0.0, scroll_pause=0.0, **cfg_kwargs)
     rex = AsyncRedditExtractor(
         config,
         storage=storage,

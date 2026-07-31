@@ -51,6 +51,7 @@ class FakeContext:
         self.fetches: List[tuple[str, Any]] = []
         self.skips: List[tuple[str, str]] = []
         self.sleeps = 0
+        self.slept: List[float | None] = []
 
     async def fetch(self, url: str, headers: Any = None) -> FetchResult:
         self.fetches.append((url, headers))
@@ -62,8 +63,9 @@ class FakeContext:
     async def skip(self, url: str, reason: str) -> None:
         self.skips.append((url, reason))
 
-    async def sleep(self) -> None:
+    async def sleep(self, seconds: float | None = None) -> None:
         self.sleeps += 1
+        self.slept.append(seconds)
 
 
 def rg_post(**overrides: Any) -> Post:
@@ -397,6 +399,37 @@ async def test_scrape_all_pages_the_whole_profile():
     candidates = await RedGifsHandler().resolve(rg_post(), ctx)
     assert [x.url for x in candidates] == [a, b, c]
     assert all(x.media_type is MediaType.VIDEO and x.ext == "mp4" for x in candidates)
+
+
+async def test_paging_paces_with_api_pause_not_the_scroll_pause():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD], pages=2),
+            user_search_url("creator", 2): user_page([SD], pages=2),
+        },
+        scrape_all=True,
+    )
+    ctx.config = ctx.config.replace(scroll_pause=9.0, api_pause=0.25)
+    await RedGifsHandler().resolve(rg_post(), ctx)
+    assert ctx.slept == [0.25]
+
+
+async def test_paging_can_be_left_unpaced():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD], pages=2),
+            user_search_url("creator", 2): user_page([SD], pages=2),
+        },
+        scrape_all=True,
+    )
+    ctx.config = ctx.config.replace(api_pause=0.0)
+    candidates = await RedGifsHandler().resolve(rg_post(), ctx)
+    assert [x.url for x in candidates] == [HD, SD]
+    assert ctx.slept == [0.0]
 
 
 async def test_a_repeat_uploader_is_scraped_only_once_per_run():

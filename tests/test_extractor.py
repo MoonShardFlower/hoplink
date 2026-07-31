@@ -135,6 +135,10 @@ class FakeBrowser:
         self.pages.append(page)
         return page
 
+    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+        # The real manager may route this straight out to the network; a fake has only the one route.
+        return await self.fetch(url, timeout_ms)
+
     async def dismiss_gates(self, page: Any) -> None:
         pass
 
@@ -189,7 +193,7 @@ def build(rounds, *, storage=None, handlers=None, **cfg_kwargs):
     else:
         browser = FakeBrowser(rounds)
     storage = storage if storage is not None else MemoryStorage()
-    config = ExtractorConfig(img_delay=0.0, scroll_pause=0.0, **cfg_kwargs)
+    config = ExtractorConfig(delay=0.0, scroll_pause=0.0, **cfg_kwargs)
     rex = AsyncRedditExtractor(
         config,
         storage=storage,
@@ -215,9 +219,9 @@ async def run(rounds, *, limit=None, media_types=MediaType.ALL, **kwargs):
 
 
 def test_keyword_overrides_replace_config_fields():
-    rex = AsyncRedditExtractor(headless=False, img_delay=0.0)
+    rex = AsyncRedditExtractor(headless=False, delay=0.0)
     assert rex.config.headless is False
-    assert rex.config.img_delay == 0.0
+    assert rex.config.delay == 0.0
 
 
 def test_keyword_overrides_layer_onto_a_given_config():
@@ -227,8 +231,8 @@ def test_keyword_overrides_layer_onto_a_given_config():
 
 
 def test_an_invalid_override_is_rejected_at_construction():
-    with pytest.raises(ValueError, match="img_delay must be >= 0"):
-        AsyncRedditExtractor(img_delay=-1.0)
+    with pytest.raises(ValueError, match="delay must be >= 0"):
+        AsyncRedditExtractor(delay=-1.0)
 
 
 def test_the_default_chain_is_used_when_no_handlers_are_given():
@@ -1103,7 +1107,7 @@ async def test_per_call_events_layer_over_the_extractors_own():
     ended: List[Any] = []
     browser = FakeBrowser([[harvested("a")]])
     rex = AsyncRedditExtractor(
-        ExtractorConfig(img_delay=0.0, scroll_pause=0.0),
+        ExtractorConfig(delay=0.0, scroll_pause=0.0),
         storage=MemoryStorage(),
         browser=browser,  # type: ignore[arg-type]
         events=Events(on_media_saved=lambda src, item: saved.append(item.filename)),

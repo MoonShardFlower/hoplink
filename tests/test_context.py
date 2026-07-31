@@ -228,6 +228,19 @@ async def test_sleep_does_nothing_when_pacing_is_disabled(no_sleep):
     assert no_sleep == []
 
 
+async def test_an_explicit_pause_overrides_the_scroll_pause(no_sleep):
+    # How a handler paces something that isn't scrolling, e.g. paging a third-party API.
+    ctx, _, _ = build(scroll_pause=1.5)
+    await ctx.sleep(0.25)
+    assert no_sleep == [0.25]
+
+
+async def test_an_explicit_zero_pause_does_not_sleep(no_sleep):
+    ctx, _, _ = build(scroll_pause=1.5)
+    await ctx.sleep(0.0)
+    assert no_sleep == []
+
+
 # -- escape hatches ---------------------------------------------------------
 
 

@@ -33,7 +33,7 @@ from tests.test_extractor_filtering import harvested
 def rex():
     """A synchronous extractor over canned posts, closed when the test ends."""
     extractor = RedditExtractor(
-        ExtractorConfig(img_delay=0.0, scroll_pause=0.0),
+        ExtractorConfig(delay=0.0, scroll_pause=0.0),
         storage=MemoryStorage(),
         browser=FakeBrowser([[harvested("a"), harvested("b")]]),  # type: ignore[arg-type]
     )
@@ -83,7 +83,7 @@ def test_extract_forwards_events(rex):
 
 def test_extract_forwards_an_output_dir(tmp_path):
     extractor = RedditExtractor(
-        ExtractorConfig(img_delay=0.0, scroll_pause=0.0),
+        ExtractorConfig(delay=0.0, scroll_pause=0.0),
         browser=FakeBrowser([[harvested("a")]]),  # type: ignore[arg-type]
     )
     try:
@@ -94,7 +94,7 @@ def test_extract_forwards_an_output_dir(tmp_path):
 
 
 def test_the_config_is_the_engines(rex):
-    assert rex.config.img_delay == 0.0
+    assert rex.config.delay == 0.0
 
 
 def test_constructor_overrides_reach_the_engine():
@@ -115,7 +115,7 @@ def test_a_registered_handler_reaches_the_engine(rex):
 
 def test_an_error_from_a_job_surfaces_to_the_caller():
     extractor = RedditExtractor(
-        ExtractorConfig(img_delay=0.0, scroll_pause=0.0),
+        ExtractorConfig(delay=0.0, scroll_pause=0.0),
         browser=FakeBrowser([[]], posts_render=False),  # type: ignore[arg-type]
     )
     try:
