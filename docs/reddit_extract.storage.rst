@@ -12,6 +12,14 @@ reddit\_extract.storage.manifest module
    :show-inheritance:
    :undoc-members:
 
+reddit\_extract.storage.naming module
+-------------------------------------
+
+.. automodule:: reddit_extract.storage.naming
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 reddit\_extract.storage.storage module
 --------------------------------------
 

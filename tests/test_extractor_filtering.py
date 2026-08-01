@@ -182,7 +182,7 @@ async def test_filtered_posts_are_never_downloaded():
     assert result.media_saved == 1
     # the rejected post cost no fetch at all
     assert browser.fetched == ["https://i.redd.it/a.jpg"]
-    assert list(storage.files["pics"]) == ["0001.jpg"]
+    assert list(storage.files["pics"]) == ["0001_photo_a.jpg"]
 
 
 async def test_filtered_post_is_absent_from_the_result():

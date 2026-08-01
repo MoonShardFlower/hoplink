@@ -313,49 +313,58 @@ def test_the_default_backend_is_built_once_and_reused():
     assert rex._resolve_storage(None) is rex._resolve_storage(None)
 
 
-# -- _filename --------------------------------------------------------------
+# -- extension and grouping -------------------------------------------------
+# (the naming rules themselves live in test_naming.py)
 
 
-def candidate(url="https://i.redd.it/a.jpg", media_type=MediaType.IMAGE, ext=None):
-    return MediaCandidate(url=url, media_type=media_type, ext=ext)
-
-
-def test_a_single_file_post_is_named_by_its_index():
-    assert AsyncRedditExtractor._filename(1, None, candidate(ext="jpg")) == "0001.jpg"
-    assert AsyncRedditExtractor._filename(42, None, candidate(ext="jpg")) == "0042.jpg"
-
-
-def test_a_multi_file_post_numbers_its_parts():
-    assert AsyncRedditExtractor._filename(1, 2, candidate(ext="jpg")) == "0001_02.jpg"
-
-
-def test_an_index_beyond_four_digits_still_works():
-    assert (
-        AsyncRedditExtractor._filename(12345, None, candidate(ext="jpg")) == "12345.jpg"
+def candidate(
+    url="https://i.redd.it/a.jpg", media_type=MediaType.IMAGE, ext=None, collection=None
+):
+    return MediaCandidate(
+        url=url, media_type=media_type, ext=ext, collection=collection
     )
 
 
 def test_a_candidate_without_an_extension_takes_it_from_the_url():
-    assert (
-        AsyncRedditExtractor._filename(1, None, candidate("https://x/a.PNG"))
-        == "0001.png"
-    )
-
-
-def test_a_url_query_string_is_not_mistaken_for_an_extension():
-    cand = candidate("https://i.redd.it/a.jpg?width=640&s=abc")
-    assert AsyncRedditExtractor._filename(1, None, cand) == "0001.jpg"
+    assert AsyncRedditExtractor._extension(candidate("https://x/a.PNG")) == "png"
 
 
 def test_an_extension_less_video_falls_back_to_mp4():
     cand = candidate("https://v.redd.it/abc123", media_type=MediaType.VIDEO)
-    assert AsyncRedditExtractor._filename(1, None, cand) == "0001.mp4"
+    assert AsyncRedditExtractor._extension(cand) == "mp4"
 
 
 def test_an_extension_less_image_falls_back_to_jpg():
-    assert (
-        AsyncRedditExtractor._filename(1, None, candidate("https://x/a")) == "0001.jpg"
-    )
+    assert AsyncRedditExtractor._extension(candidate("https://x/a")) == "jpg"
+
+
+def test_candidates_with_no_collection_form_one_unnamed_group():
+    cands = [candidate(), candidate("https://i.redd.it/b.jpg")]
+    assert AsyncRedditExtractor._grouped(cands) == [("", cands)]
+
+
+def test_each_collection_gets_its_own_group_in_resolution_order():
+    first = candidate(collection="alice")
+    own = candidate("https://i.redd.it/b.jpg")
+    second = candidate("https://i.redd.it/c.jpg", collection="bob")
+    third = candidate("https://i.redd.it/d.jpg", collection="alice")
+    assert AsyncRedditExtractor._grouped([first, own, second, third]) == [
+        ("alice", [first, third]),
+        ("", [own]),
+        ("bob", [second]),
+    ]
+
+
+def test_a_collection_name_is_slugged_once_for_the_whole_group():
+    # The folder, the names inside it, and the manifest record must all agree on one spelling.
+    cand = candidate(collection="Someone's Profile")
+    assert AsyncRedditExtractor._grouped([cand])[0][0] == "Someone_s_Profile"
+
+
+def test_a_collection_name_with_nothing_sluggable_is_no_collection_at_all():
+    # There is no folder name to be had, so the files belong beside the source's own.
+    cand = candidate(collection="!!!")
+    assert AsyncRedditExtractor._grouped([cand]) == [("", [cand])]
 
 
 # -- harvesting: the modern infinite scroll ---------------------------------
@@ -579,8 +588,8 @@ async def test_a_text_post_is_saved_as_a_markdown_document():
     assert result.media_found == 1
     assert result.media_saved == 1
     assert browser.fetched == []  # the bytes are composed, not downloaded
-    assert list(storage.files["pics"]) == ["0001.md"]
-    assert b"title:" in storage.files["pics"]["0001.md"]
+    assert list(storage.files["pics"]) == ["0001_photo_t.md"]
+    assert b"title:" in storage.files["pics"]["0001_photo_t.md"]
 
 
 # -- a handler that misbehaves ----------------------------------------------
@@ -645,7 +654,7 @@ async def test_numbering_continues_past_what_the_manifest_already_holds():
         "files": {"0001.jpg": {"media_url": "https://i.redd.it/a.jpg"}},
     }
     await run([[harvested("b")]], storage=storage)
-    assert list(storage.files["pics"]) == ["0002.jpg"]
+    assert list(storage.files["pics"]) == ["0002_photo_b.jpg"]
 
 
 async def test_a_file_already_in_storage_is_not_downloaded_again():
@@ -663,7 +672,7 @@ async def test_identical_bytes_at_a_new_url_are_saved_twice_by_default():
     result, storage, _ = await run([[harvested("a"), harvested("b")]])
     assert result.media_saved == 2
     assert result.skipped_duplicate == 0
-    assert sorted(storage.files["pics"]) == ["0001.jpg", "0002.jpg"]
+    assert sorted(storage.files["pics"]) == ["0001_photo_a.jpg", "0002_photo_b.jpg"]
 
 
 async def test_identical_bytes_at_a_new_url_are_skipped_when_dedupe_is_on():
@@ -673,7 +682,7 @@ async def test_identical_bytes_at_a_new_url_are_skipped_when_dedupe_is_on():
     )
     assert result.media_saved == 1
     assert result.skipped_duplicate == 1
-    assert list(storage.files["pics"]) == ["0001.jpg"]
+    assert list(storage.files["pics"]) == ["0001_photo_a.jpg"]
 
 
 async def test_a_duplicate_is_reported_through_on_skip():
@@ -692,7 +701,7 @@ async def test_dedupe_records_the_hash_it_saved():
     # sha256 of b"imagebytes"
     digest = result.items[0].sha256
     assert digest is not None and len(digest) == 64
-    assert storage.manifests["pics"]["files"]["0001.jpg"]["sha256"] == digest
+    assert storage.manifests["pics"]["files"]["0001_photo_a.jpg"]["sha256"] == digest
 
 
 async def test_different_bytes_are_both_kept_under_dedupe():
@@ -773,14 +782,15 @@ async def test_a_post_still_counts_as_matched_when_its_download_fails():
 async def test_a_saved_item_carries_its_posts_provenance():
     result, _, _ = await run([[harvested("a")]])
     item = result.items[0]
-    assert item.filename == "0001.jpg"
-    assert item.path == "memory://pics/0001.jpg"
+    assert item.filename == "0001_photo_a.jpg"
+    assert item.path == "memory://pics/0001_photo_a.jpg"
     assert item.downloaded is True
     assert item.size == len(b"imagebytes")
     assert item.post_id == "a"
     assert item.author == "alice"
     assert item.title == "photo a"
     assert item.source_key == "pics"
+    assert item.collection is None
 
 
 async def test_saving_is_announced():
@@ -791,7 +801,7 @@ async def test_saving_is_announced():
         media_types=MediaType.ALL,
         events=Events(on_media_saved=lambda src, item: saved.append(item.filename)),
     )
-    assert saved == ["0001.jpg"]
+    assert saved == ["0001_photo_a.jpg"]
 
 
 async def test_the_result_reports_where_everything_went():
@@ -807,7 +817,7 @@ async def test_the_result_reports_where_everything_went():
 
 async def test_the_manifest_is_written_at_the_end_of_a_job():
     _, storage, _ = await run([[harvested("a")]])
-    assert list(storage.manifests["pics"]["files"]) == ["0001.jpg"]
+    assert list(storage.manifests["pics"]["files"]) == ["0001_photo_a.jpg"]
 
 
 async def test_the_manifest_is_flushed_on_the_configured_cadence():
@@ -837,6 +847,195 @@ async def test_a_dry_run_writes_no_manifest():
     assert result.manifest_path is None
 
 
+# -- file names -------------------------------------------------------------
+
+
+async def test_a_file_is_named_after_the_post_it_came_from():
+    _, storage, _ = await run([[harvested("a", title="Hello, World!")]])
+    assert list(storage.files["pics"]) == ["0001_Hello_World.jpg"]
+
+
+async def test_a_post_with_no_usable_title_falls_back_to_its_index():
+    _, storage, _ = await run([[harvested("a", title="***")]])
+    assert list(storage.files["pics"]) == ["0001.jpg"]
+
+
+async def test_a_multi_file_post_repeats_the_title_across_its_parts():
+    class TwoFileHandler(MediaHandler):
+        media_type = MediaType.IMAGE
+
+        def can_handle(self, post: Post) -> bool:
+            return True
+
+        async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+            return [
+                candidate("https://i.redd.it/one.jpg"),
+                candidate("https://i.redd.it/two.jpg"),
+            ]
+
+    _, storage, _ = await run(
+        [[harvested("a", title="Sunset Ridge")]], handlers=[TwoFileHandler()]
+    )
+    assert sorted(storage.files["pics"]) == [
+        "0001_01_Sunset_Ridge.jpg",
+        "0001_02_Sunset_Ridge.jpg",
+    ]
+
+
+# -- collections ------------------------------------------------------------
+
+
+class CollectionHandler(MediaHandler):
+    """A scrape-all style handler: one post, a whole named collection of files."""
+
+    media_type = MediaType.IMAGE
+
+    def __init__(self, collection: str = "creator", count: int = 2) -> None:
+        self.collection = collection
+        self.count = count
+
+    def can_handle(self, post: Post) -> bool:
+        return True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        return [
+            candidate(
+                "https://media.example/{}/{}.jpg".format(self.collection, n),
+                collection=self.collection,
+            )
+            for n in range(1, self.count + 1)
+        ]
+
+
+async def test_a_collection_lands_in_its_own_folder():
+    _, storage, _ = await run([[harvested("a")]], handlers=[CollectionHandler()])
+    assert "pics" not in storage.files or storage.files["pics"] == {}
+    assert sorted(storage.files["pics/creator"]) == [
+        "0001_creator.jpg",
+        "0002_creator.jpg",
+    ]
+
+
+async def test_a_collections_files_are_named_after_the_collection_not_the_post():
+    # The post's title says nothing about the other 200 files the profile happens to hold.
+    _, storage, _ = await run(
+        [[harvested("a", title="Check out this clip")]], handlers=[CollectionHandler()]
+    )
+    assert all("Check" not in name for name in storage.files["pics/creator"])
+
+
+async def test_a_collection_numbers_every_file_of_its_own():
+    # Unlike a gallery, these are separate uploads, so each takes an index rather than a part number.
+    _, storage, _ = await run([[harvested("a")]], handlers=[CollectionHandler(count=3)])
+    assert sorted(storage.files["pics/creator"]) == [
+        "0001_creator.jpg",
+        "0002_creator.jpg",
+        "0003_creator.jpg",
+    ]
+
+
+async def test_a_collection_gets_a_manifest_of_its_own():
+    _, storage, _ = await run([[harvested("a")]], handlers=[CollectionHandler()])
+    manifest = storage.manifests["pics/creator"]
+    assert (manifest["source"], manifest["collection"]) == ("pics", "creator")
+    assert sorted(manifest["files"]) == ["0001_creator.jpg", "0002_creator.jpg"]
+
+
+async def test_the_sources_manifest_stays_at_post_level():
+    # The point of the arrangement: a post that resolved to a whole profile costs one entry, not N.
+    _, storage, _ = await run([[harvested("a")]], handlers=[CollectionHandler(count=5)])
+    assert storage.manifests["pics"]["files"] == {}
+    record = storage.manifests["pics"]["collections"]["creator"]
+    assert record["post_id"] == "a"
+    assert record["name"] == "creator"
+    assert record["files"] == 5
+
+
+async def test_a_collection_name_is_slugged_into_its_folder():
+    _, storage, _ = await run(
+        [[harvested("a")]], handlers=[CollectionHandler(collection="Some Creator")]
+    )
+    assert sorted(storage.files["pics/Some_Creator"]) == [
+        "0001_Some_Creator.jpg",
+        "0002_Some_Creator.jpg",
+    ]
+
+
+async def test_a_collection_resumes_its_own_numbering_across_runs():
+    storage = MemoryStorage()
+    storage.manifests["pics/creator"] = {
+        "source": "pics",
+        "collection": "creator",
+        "files": {"0004_creator.jpg": {"media_url": "https://media.example/old.jpg"}},
+    }
+    await run([[harvested("a")]], storage=storage, handlers=[CollectionHandler()])
+    assert sorted(storage.files["pics/creator"]) == [
+        "0005_creator.jpg",
+        "0006_creator.jpg",
+    ]
+
+
+async def test_a_collections_own_manifest_is_what_skips_a_known_url():
+    storage = MemoryStorage()
+    storage.manifests["pics/creator"] = {
+        "source": "pics",
+        "collection": "creator",
+        "files": {
+            "0001_creator.jpg": {"media_url": "https://media.example/creator/1.jpg"}
+        },
+    }
+    result, _, browser = await run(
+        [[harvested("a")]], storage=storage, handlers=[CollectionHandler()]
+    )
+    assert result.skipped_known == 1
+    assert browser.fetched == ["https://media.example/creator/2.jpg"]
+
+
+async def test_two_collections_from_one_listing_stay_apart():
+    class TwoProfileHandler(MediaHandler):
+        media_type = MediaType.IMAGE
+
+        def can_handle(self, post: Post) -> bool:
+            return True
+
+        async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+            name = "creator_" + post.id
+            return [
+                candidate("https://media.example/{}.jpg".format(name), collection=name)
+            ]
+
+    _, storage, _ = await run(
+        [[harvested("a"), harvested("b")]], handlers=[TwoProfileHandler()]
+    )
+    assert list(storage.files["pics/creator_a"]) == ["0001_creator_a.jpg"]
+    assert list(storage.files["pics/creator_b"]) == ["0001_creator_b.jpg"]
+    assert sorted(storage.manifests["pics"]["collections"]) == [
+        "creator_a",
+        "creator_b",
+    ]
+
+
+async def test_a_saved_collection_item_records_where_it_went():
+    result, _, _ = await run([[harvested("a")]], handlers=[CollectionHandler(count=1)])
+    item = result.items[0]
+    assert item.collection == "creator"
+    assert item.source_key == "pics/creator"
+    assert item.path == "memory://pics/creator/0001_creator.jpg"
+
+
+async def test_a_dry_run_plans_a_collection_without_creating_its_folder():
+    rex, storage, browser = build([[harvested("a")]], handlers=[CollectionHandler()])
+    result = await rex.extract(
+        Subreddit("pics", limit=1), media_types=MediaType.ALL, dry_run=True
+    )
+    assert [i.filename for i in result.items] == [
+        "0001_creator.jpg",
+        "0002_creator.jpg",
+    ]
+    assert storage.files == {}
+    assert browser.fetched == []
+
+
 # -- dry runs ---------------------------------------------------------------
 
 
@@ -847,7 +1046,10 @@ async def test_a_dry_run_plans_files_without_writing_them():
     )
     assert result.media_found == 2
     assert result.media_saved == 0
-    assert [i.filename for i in result.items] == ["0001.jpg", "0002.jpg"]
+    assert [i.filename for i in result.items] == [
+        "0001_photo_a.jpg",
+        "0002_photo_b.jpg",
+    ]
     assert all(i.downloaded is False for i in result.items)
     assert browser.fetched == []
     assert storage.files == {}  # prepare() never even ran
@@ -1117,7 +1319,7 @@ async def test_per_call_events_layer_over_the_extractors_own():
         media_types=MediaType.ALL,
         events=Events(on_job_end=lambda res: ended.append(res)),
     )
-    assert saved == ["0001.jpg"]  # the constructor's callback survived
+    assert saved == ["0001_photo_a.jpg"]  # the constructor's callback survived
     assert len(ended) == 1
 
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 from contextlib import aclosing
 from datetime import datetime, timezone
 from typing import (
@@ -20,11 +19,11 @@ from typing import (
     Callable,
     Iterable,
     List,
+    NamedTuple,
     Optional,
     Sequence,
     Union,
 )
-from urllib.parse import urlparse
 
 from ..events import Events, emit
 from ..exceptions import NoPostsFoundError
@@ -36,7 +35,15 @@ from ..models.media import MediaCandidate, MediaItem, MediaType, MediaTypeLike
 from ..models.post import Post
 from ..models.result import ExtractionResult
 from ..models.source import Source, parse_source
-from ..storage import FilesystemStorage, Manifest, StorageBackend
+from ..storage import (
+    FilesystemStorage,
+    Manifest,
+    ManifestSet,
+    StorageBackend,
+    media_extension,
+    media_filename,
+    slugify,
+)
 from .browser import BrowserManager, FetchResult
 from .context import ExtractionContext
 from .timing import Timings
@@ -126,6 +133,26 @@ JS_NEXT_PAGE = """
 #: Non-2xx statuses a retry could plausibly clear, alongside anything >= 500. Status 0 is how
 #: `BrowserManager.fetch` reports a transport error (timeout, connection reset, DNS failure).
 RETRY_STATUSES = frozenset({0, 408, 425, 429})
+
+
+class _Planned(NamedTuple):
+    """
+    One file the pipeline has committed to downloading.
+
+    Naming and index allocation happen in a single sequential pass before any download starts, so the plan already
+    knows where each file goes; the download pass only fills in bytes.
+
+    Attributes:
+        manifest: The manifest that will record the file, which also names the folder it is written to.
+        filename: The name to store it under.
+        item: The MediaItem describing it, completed once the bytes land.
+        cand: The candidate to fetch.
+    """
+
+    manifest: Manifest
+    filename: str
+    item: MediaItem
+    cand: MediaCandidate
 
 
 class AsyncRedditExtractor:
@@ -493,27 +520,55 @@ class AsyncRedditExtractor:
         return [Post.from_harvest(harvested[pid]) for pid in order[: source.limit]]
 
     @staticmethod
-    def _filename(index: int, part: int | None, cand: MediaCandidate) -> str:
+    def _extension(cand: MediaCandidate) -> str:
+        """The extension a candidate is saved under, falling back to ``mp4`` for video and ``jpg`` otherwise."""
+        return media_extension(
+            cand.url,
+            cand.ext,
+            default="mp4" if cand.media_type == MediaType.VIDEO else "jpg",
+        )
+
+    @staticmethod
+    def _grouped(
+        candidates: Sequence[MediaCandidate],
+    ) -> List[tuple[str, List[MediaCandidate]]]:
         """
-        Build a zero-padded filename for a candidate.
+        Split a post's candidates by the collection each belongs to, keeping resolution order.
 
         Args:
-            index: The post's allocated index (e.g. ``1`` -> ``0001``).
-            part: The 1-based slide number for multi-file posts, or None for single-file posts.
-            cand: The candidate being saved (supplies the extension).
+            candidates: The candidates a handler resolved for one post.
 
         Returns:
-            A name like ``"0001.jpg"`` or ``"0001_02.jpg"``.
-            The extension falls back to ``mp4`` for video and ``jpg`` otherwise.
+            ``(collection, candidates)`` pairs. The collection is ``""`` for a post's own media, which is stored
+            beside the source's other files, and a slug otherwise, which gets a folder of its own. Names are
+            slugged once here, so the folder, the file names inside it, and the manifest record all agree on one
+            spelling.
         """
-        ext = cand.ext or os.path.splitext(urlparse(cand.url).path)[1].lower().lstrip(
-            "."
-        )
-        if not ext:
-            ext = "mp4" if cand.media_type == MediaType.VIDEO else "jpg"
-        if part is None:
-            return "{:04d}.{}".format(index, ext)
-        return "{:04d}_{:02d}.{}".format(index, part, ext)
+        groups: dict[str, List[MediaCandidate]] = {}
+        for cand in candidates:
+            name = slugify(cand.collection) if cand.collection else ""
+            groups.setdefault(name, []).append(cand)
+        return list(groups.items())
+
+    @staticmethod
+    def _collection_entry(
+        post: Post, group: Sequence[MediaCandidate]
+    ) -> dict[str, Any]:
+        """
+        The source manifest's post-level record for a collection: which post led here, and what it was called.
+
+        The files themselves are left to the collection's own manifest, which is the point of the arrangement --
+        one post that resolved to a thousand clips costs the source's manifest one entry, not a thousand.
+        """
+        return {
+            "name": group[0].collection,
+            "post_id": post.id,
+            "post_url": post.url,
+            "title": post.title,
+            "author": post.author,
+            "created": post.created,
+            "media_type": group[0].media_type.label,
+        }
 
     @staticmethod
     def _is_transient(result: FetchResult) -> bool:
@@ -701,15 +756,7 @@ class AsyncRedditExtractor:
         timings = result.timings
         await emit(ev.on_job_start, source)
 
-        if not dry_run:
-            storage.prepare(source.key)
-        manifest = Manifest(
-            source.key,
-            storage.read_manifest(source.key),
-            existing_files=storage.list_files(source.key),
-        )
-        known = manifest.known_urls()
-        known_hashes = manifest.known_hashes()
+        manifests = ManifestSet(storage, source.key, persist=not dry_run)
         unflushed = 0
 
         page = await self._browser.new_page()
@@ -767,55 +814,78 @@ class AsyncRedditExtractor:
                     continue
 
                 result.media_found += len(candidates)
-                multi = len(candidates) > 1
-                index: int | None = None
                 # Plan first, download second. Allocating indices and filenames in one sequential pass keeps
                 # naming identical however many downloads later run at once, and leaves the manifest, the hash
                 # de-dupe, and the event stream to the single-threaded commit pass below.
-                planned: List[tuple[str, MediaItem, MediaCandidate]] = []
+                planned: List[_Planned] = []
                 batch_urls: set[str] = set()
-                for part, cand in enumerate(candidates, 1):
-                    # batch_urls guards the same URL appearing twice in one post: with downloads in flight
-                    # concurrently, `known` can't yet have been updated by the first one's commit.
-                    if cand.url in known or cand.url in batch_urls:
-                        result.skipped_known += 1
-                        continue
-                    if index is None:
-                        index = manifest.allocate_index()
-                    fname = self._filename(index, part if multi else None, cand)
-                    item = MediaItem(
-                        url=cand.url,
-                        media_type=cand.media_type,
-                        filename=fname,
-                        post_id=post.id,
-                        post_url=post.url,
-                        title=post.title,
-                        author=post.author,
-                        created=post.created,
-                        source_key=source.key,
+                for name, group in self._grouped(candidates):
+                    collected = bool(name)
+                    manifest = (
+                        manifests.collection(name) if collected else manifests.main
                     )
-                    if dry_run:
-                        result.items.append(item)
-                        await emit(ev.on_media_found, source, item)
-                        continue
-                    if storage.exists(source.key, fname):
-                        result.skipped_existing += 1
-                        continue
-                    batch_urls.add(cand.url)
-                    planned.append((fname, item, cand))
+                    # A collection's files are named after the collection, a post's own after the post.
+                    slug = name if collected else slugify(post.title)
+                    multi = not collected and len(group) > 1
+                    index: int | None = None
+                    for part, cand in enumerate(group, 1):
+                        # batch_urls guards the same URL appearing twice in one post: with downloads in flight
+                        # concurrently, the manifest can't yet know about the first one's commit.
+                        if manifest.knows_url(cand.url) or cand.url in batch_urls:
+                            result.skipped_known += 1
+                            continue
+                        # A collection numbers each of its files; a post's own media share the post's index.
+                        if collected or index is None:
+                            index = manifest.allocate_index()
+                        fname = media_filename(
+                            index,
+                            self._extension(cand),
+                            slug=slug,
+                            part=part if multi else None,
+                        )
+                        item = MediaItem(
+                            url=cand.url,
+                            media_type=cand.media_type,
+                            filename=fname,
+                            post_id=post.id,
+                            post_url=post.url,
+                            title=post.title,
+                            author=post.author,
+                            created=post.created,
+                            source_key=manifest.storage_key,
+                            collection=name or None,
+                        )
+                        if dry_run:
+                            result.items.append(item)
+                            await emit(ev.on_media_found, source, item)
+                            continue
+                        if storage.exists(manifest.storage_key, fname):
+                            result.skipped_existing += 1
+                            continue
+                        batch_urls.add(cand.url)
+                        planned.append(_Planned(manifest, fname, item, cand))
+                    if collected:
+                        # Post-level provenance, recorded whether or not this run had anything left to fetch.
+                        manifests.main.add_collection(
+                            name, self._collection_entry(post, group)
+                        )
+                        manifests.touch(manifests.main)
 
                 plans = iter(planned)
                 stream = self._download_stream(
-                    ctx, [cand for _, _, cand in planned], timings
+                    ctx, [plan.cand for plan in planned], timings
                 )
                 async with aclosing(stream) as outcomes:
                     async for outcome in outcomes:
-                        fname, item, cand = next(plans)
+                        plan = next(plans)
+                        item, cand = plan.item, plan.cand
                         if outcome.ok and outcome.body is not None:
                             if cfg.dedupe_by_hash:
                                 with timings.measure("hash"):
                                     digest = hashlib.sha256(outcome.body).hexdigest()
-                                if digest in known_hashes:
+                                # Scoped to the folder the file would land in, so a collection de-duplicates
+                                # against its own contents rather than against the rest of the source.
+                                if plan.manifest.knows_hash(digest):
                                     result.skipped_duplicate += 1
                                     await emit(
                                         ev.on_skip,
@@ -824,24 +894,24 @@ class AsyncRedditExtractor:
                                         "duplicate content",
                                     )
                                     continue
-                                known_hashes.add(digest)
                                 item.sha256 = digest
                             with timings.measure("write"):
                                 item.path = storage.write(
-                                    source.key, fname, outcome.body
+                                    plan.manifest.storage_key,
+                                    plan.filename,
+                                    outcome.body,
                                 )
                             item.size = len(outcome.body)
                             item.downloaded = True
-                            manifest.add(fname, item.to_manifest_entry())
-                            known.add(cand.url)
+                            # add() registers the URL and hash, so the next candidate already sees this one.
+                            plan.manifest.add(plan.filename, item.to_manifest_entry())
+                            manifests.touch(plan.manifest)
                             result.items.append(item)
                             result.media_saved += 1
                             unflushed += 1
                             if unflushed >= max(1, cfg.manifest_flush_every):
                                 with timings.measure("manifest"):
-                                    path = storage.write_manifest(
-                                        source.key, manifest.to_dict()
-                                    )
+                                    path = manifests.flush()
                                 result.manifest_path = path or result.manifest_path
                                 unflushed = 0
                             await emit(ev.on_media_saved, source, item)
@@ -858,7 +928,7 @@ class AsyncRedditExtractor:
 
         if not dry_run:
             with timings.measure("manifest"):
-                path = storage.write_manifest(source.key, manifest.to_dict())
+                path = manifests.flush(force=True)
             result.manifest_path = path or result.manifest_path
         result.output_dir = storage.location(source.key)
         result.finished_at = datetime.now(timezone.utc)

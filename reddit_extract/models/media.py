@@ -114,6 +114,9 @@ class MediaCandidate:
         content_prefixes: Acceptable Content-Type prefixes; a download whose response type matches none of these is rejected.
         body: Ready-made file contents. When present, the pipeline writes these bytes instead of fetching ``url``
             (used for handler-composed files such as a text post's Markdown document).
+        collection: Name of the collection this file belongs to, or None for a post's own media. Candidates
+            carrying one are stored together in their own ``<source>/<collection>/`` folder with their own manifest,
+            and are named after the collection rather than the post.
     """
 
     url: str
@@ -121,6 +124,7 @@ class MediaCandidate:
     ext: str | None = None
     content_prefixes: tuple[str, ...] = ("image/",)
     body: bytes | None = None
+    collection: str | None = None
 
 
 @dataclass
@@ -140,7 +144,8 @@ class MediaItem:
         title: Title of the originating post.
         author: Author of the originating post.
         created: ISO-8601 creation time of the post, if known.
-        source_key: Storage key of the source this file belongs to.
+        source_key: Storage key of the folder this file went into (the source's, or a collection's inside it).
+        collection: The collection this file belongs to, or None when it sits in the source's own folder.
     """
 
     url: str
@@ -156,6 +161,7 @@ class MediaItem:
     author: str | None = None
     created: str | None = None
     source_key: str | None = None
+    collection: str | None = None
 
     def to_manifest_entry(self) -> dict[str, Any]:
         """
@@ -200,4 +206,5 @@ class MediaItem:
             "title": self.title,
             "author": self.author,
             "created": self.created,
+            "collection": self.collection,
         }

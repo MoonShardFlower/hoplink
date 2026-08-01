@@ -198,6 +198,7 @@ def test_a_report_entry_describes_the_stored_file_and_its_post():
         "title": "a photo",
         "author": "alice",
         "created": "2026-07-16T11:45:34+00:00",
+        "collection": None,
     }
 
 

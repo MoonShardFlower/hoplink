@@ -14,8 +14,10 @@ class StorageBackend(abc.ABC):
     """
     Where extracted files and manifests go.
 
-    One backend serves many sources. Every method takes the source ``key`` (its output subdirectory / namespace).
-    Implementations must be safe to call from multiple asyncio tasks as long as each task uses its own key.
+    One backend serves many sources. Every method takes the ``key`` naming an output subdirectory / namespace:
+    a source's own (``"EarthPorn"``), or one of its collections', which nests with a ``/`` separator
+    (``"EarthPorn/someuploader"``). Implementations must be safe to call from multiple asyncio tasks as long as
+    each task uses its own key.
     """
 
     @abc.abstractmethod
@@ -127,7 +129,7 @@ class FilesystemStorage(StorageBackend):
         self.root = os.path.expanduser(root)
 
     def _dir(self, key: str) -> str:
-        return os.path.join(self.root, key)
+        return os.path.join(self.root, *key.split("/"))
 
     def _path(self, key: str, filename: str) -> str:
         return os.path.join(self._dir(key), filename)
@@ -140,7 +142,8 @@ class FilesystemStorage(StorageBackend):
 
     def list_files(self, key: str) -> list[str]:
         try:
-            return os.listdir(self._dir(key))
+            with os.scandir(self._dir(key)) as entries:
+                return [e.name for e in entries if e.is_file()]
         except OSError:  # directory doesn't exist yet
             return []
 

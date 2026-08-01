@@ -8,7 +8,12 @@ from typing import Any, Mapping
 
 import pytest
 
-from reddit_extract.storage import FilesystemStorage, Manifest, MemoryStorage
+from reddit_extract.storage import (
+    FilesystemStorage,
+    Manifest,
+    ManifestSet,
+    MemoryStorage,
+)
 from reddit_extract.storage import storage as storage_module
 from reddit_extract.storage.storage import MANIFEST_NAME, StorageBackend
 
@@ -27,6 +32,18 @@ def manifest_data(**files: Mapping[str, Any]) -> dict[str, Any]:
         "generated_at": "2026-07-16T00:00:00+00:00",
         "files": dict(files),
     }
+
+
+class CountingMemoryStorage(MemoryStorage):
+    """MemoryStorage that counts manifest writes, so a ManifestSet's flush cadence is observable."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.manifest_writes = 0
+
+    def write_manifest(self, key: str, data: Mapping[str, Any]) -> str:
+        self.manifest_writes += 1
+        return super().write_manifest(key, data)
 
 
 # -- MemoryStorage ----------------------------------------------------------
@@ -234,6 +251,33 @@ def test_an_expanded_root_really_writes_under_the_home_directory(tmp_path, monke
 
 def test_the_location_is_the_sources_directory(tmp_path):
     assert FilesystemStorage(str(tmp_path)).location("pics") == str(tmp_path / "pics")
+
+
+# -- FilesystemStorage: nested (collection) keys ----------------------------
+
+
+def test_a_nested_key_becomes_a_subdirectory(tmp_path):
+    # A collection's key carries a "/" that has to survive as a real path segment, Windows included.
+    storage = FilesystemStorage(str(tmp_path))
+    path = storage.write("pics/creator", "0001_creator.mp4", b"bytes")
+    assert path == str(tmp_path / "pics" / "creator" / "0001_creator.mp4")
+    assert storage.exists("pics/creator", "0001_creator.mp4") is True
+    assert storage.location("pics/creator") == str(tmp_path / "pics" / "creator")
+
+
+def test_a_nested_key_gets_its_own_manifest(tmp_path):
+    storage = FilesystemStorage(str(tmp_path))
+    storage.write_manifest("pics/creator", {"source": "pics", "collection": "creator"})
+    assert (tmp_path / "pics" / "creator" / MANIFEST_NAME).is_file()
+    assert storage.read_manifest("pics/creator")["collection"] == "creator"
+
+
+def test_a_sources_listing_reports_files_not_its_collection_folders(tmp_path):
+    # A folder named for a digit-leading uploader would otherwise be read as a stored file's index.
+    storage = FilesystemStorage(str(tmp_path))
+    storage.write("pics", "0001_a.jpg", b"a")
+    storage.write("pics/9lives", "0001_9lives.mp4", b"b")
+    assert storage.list_files("pics") == ["0001_a.jpg"]
 
 
 # -- FilesystemStorage: manifests -------------------------------------------
@@ -450,3 +494,198 @@ def test_a_manifest_survives_a_round_trip_through_storage(tmp_path):
     second = Manifest("pics", storage.read_manifest("pics"), storage.list_files("pics"))
     assert second.known_urls() == {"https://i.redd.it/a.jpg"}
     assert second.allocate_index() == 2
+
+
+# -- Manifest: membership lookups -------------------------------------------
+
+
+def test_a_recorded_url_is_known():
+    manifest = Manifest("pics", manifest_data(**{"0001.jpg": entry("u1")}))
+    assert manifest.knows_url("u1") is True
+    assert manifest.knows_url("u2") is False
+
+
+def test_a_url_becomes_known_as_soon_as_it_is_added():
+    # The next candidate of the same post must see it, before any manifest is written.
+    manifest = Manifest("pics")
+    manifest.add("0001.jpg", entry("u1"))
+    assert manifest.knows_url("u1") is True
+
+
+def test_a_recorded_hash_is_known():
+    manifest = Manifest("pics")
+    manifest.add("0001.jpg", entry("u1", sha256="abc"))
+    assert manifest.knows_hash("abc") is True
+    assert manifest.knows_hash("def") is False
+
+
+def test_overwriting_a_record_forgets_what_it_replaced():
+    manifest = Manifest("pics")
+    manifest.add("0001.jpg", entry("u1", sha256="abc"))
+    manifest.add("0001.jpg", entry("u2", sha256="def"))
+    assert (manifest.knows_url("u1"), manifest.knows_hash("abc")) == (False, False)
+    assert (manifest.knows_url("u2"), manifest.knows_hash("def")) == (True, True)
+
+
+def test_the_known_url_set_is_a_copy():
+    manifest = Manifest("pics", manifest_data(**{"0001.jpg": entry("u1")}))
+    manifest.known_urls().clear()
+    assert manifest.knows_url("u1") is True
+
+
+# -- Manifest: collections --------------------------------------------------
+
+
+def test_a_fresh_manifest_holds_no_collections():
+    assert list(Manifest("pics").collections()) == []
+
+
+def test_a_collection_manifest_knows_where_it_lives():
+    manifest = Manifest("pics", collection="creator")
+    assert manifest.storage_key == "pics/creator"
+    assert Manifest("pics").storage_key == "pics"
+
+
+def test_a_collection_manifest_names_both_its_source_and_itself():
+    data = Manifest("pics", collection="creator").to_dict()
+    assert (data["source"], data["collection"]) == ("pics", "creator")
+
+
+def test_a_manifest_of_the_source_itself_carries_no_collection_field():
+    assert "collection" not in Manifest("pics").to_dict()
+
+
+def test_a_collection_record_is_kept_at_post_level():
+    manifest = Manifest("pics")
+    manifest.add_collection("creator", {"post_id": "p1", "files": 214})
+    assert dict(manifest.collections()) == {"creator": {"post_id": "p1", "files": 214}}
+    assert len(manifest) == 0  # the collection's own files are not this manifest's
+
+
+def test_adding_a_collection_again_merges_rather_than_replaces():
+    # The post's provenance is written once; the file count is restated on every flush.
+    manifest = Manifest("pics")
+    manifest.add_collection("creator", {"post_id": "p1", "files": 3})
+    manifest.add_collection("creator", {"files": 9})
+    assert dict(manifest.collections())["creator"] == {"post_id": "p1", "files": 9}
+
+
+def test_collections_are_left_out_when_there_are_none():
+    # Manifests of sources that never met a collection stay byte-for-byte what they always were.
+    assert "collections" not in Manifest("pics").to_dict()
+
+
+def test_collections_round_trip_through_a_manifest_document():
+    manifest = Manifest("pics")
+    manifest.add_collection("creator", {"post_id": "p1"})
+    reloaded = Manifest("pics", manifest.to_dict())
+    assert dict(reloaded.collections()) == {"creator": {"post_id": "p1"}}
+
+
+def test_a_collections_block_that_is_not_an_object_loads_empty():
+    assert list(Manifest("pics", {"collections": ["creator"]}).collections()) == []
+
+
+def test_collection_records_that_are_not_objects_are_dropped():
+    data = {"collections": {"a": "junk", "b": {"post_id": "p1"}}}
+    assert list(dict(Manifest("pics", data).collections())) == ["b"]
+
+
+# -- ManifestSet ------------------------------------------------------------
+
+
+def test_a_set_prepares_and_loads_the_sources_own_manifest():
+    storage = MemoryStorage()
+    storage.manifests["pics"] = manifest_data(**{"0001.jpg": entry("u1")})
+    manifests = ManifestSet(storage, "pics")
+    assert manifests.main.knows_url("u1") is True
+    assert storage.files["pics"] == {}  # prepare() ran
+
+
+def test_a_collection_manifest_is_created_on_first_use():
+    storage = MemoryStorage()
+    manifests = ManifestSet(storage, "pics")
+    collection = manifests.collection("creator")
+    assert collection.storage_key == "pics/creator"
+    assert "pics/creator" in storage.files  # its folder was prepared
+
+
+def test_the_same_collection_hands_back_the_same_manifest():
+    # Two posts naming one uploader must share a numbering sequence, not restart it.
+    manifests = ManifestSet(MemoryStorage(), "pics")
+    assert manifests.collection("creator") is manifests.collection("creator")
+
+
+def test_a_collection_continues_its_own_folders_numbering():
+    storage = MemoryStorage()
+    storage.manifests["pics/creator"] = {
+        "source": "pics",
+        "collection": "creator",
+        "files": {"0007_creator.mp4": entry("u1")},
+    }
+    manifests = ManifestSet(storage, "pics")
+    assert manifests.collection("creator").allocate_index() == 8
+    assert manifests.main.allocate_index() == 1  # the source numbers separately
+
+
+def test_flushing_writes_nothing_until_something_changed():
+    storage = CountingMemoryStorage()
+    ManifestSet(storage, "pics").flush()
+    assert storage.manifest_writes == 0
+
+
+def test_a_forced_flush_writes_the_sources_manifest_regardless():
+    storage = CountingMemoryStorage()
+    manifests = ManifestSet(storage, "pics")
+    assert manifests.flush(force=True) == "memory://pics/manifest.json"
+    assert storage.manifest_writes == 1
+
+
+def test_a_touched_manifest_is_written_once_per_flush():
+    storage = CountingMemoryStorage()
+    manifests = ManifestSet(storage, "pics")
+    manifests.main.add("0001.jpg", entry("u1"))
+    manifests.touch(manifests.main)
+    manifests.flush()
+    manifests.flush()  # nothing new since
+    assert storage.manifest_writes == 1
+
+
+def test_touching_a_collection_writes_it_and_the_source_together():
+    # The source's manifest carries the collection's file count, which just moved.
+    storage = CountingMemoryStorage()
+    manifests = ManifestSet(storage, "pics")
+    collection = manifests.collection("creator")
+    collection.add("0001_creator.mp4", entry("u1"))
+    manifests.touch(collection)
+    manifests.flush()
+    assert storage.manifest_writes == 2
+    assert list(storage.manifests["pics/creator"]["files"]) == ["0001_creator.mp4"]
+
+
+def test_a_flush_restates_each_collections_file_count():
+    storage = MemoryStorage()
+    manifests = ManifestSet(storage, "pics")
+    collection = manifests.collection("creator")
+    manifests.main.add_collection("creator", {"post_id": "p1"})
+    for i in (1, 2, 3):
+        collection.add("000{}_creator.mp4".format(i), entry("u{}".format(i)))
+    manifests.touch(collection)
+    manifests.flush()
+    assert storage.manifests["pics"]["collections"]["creator"] == {
+        "post_id": "p1",
+        "files": 3,
+    }
+
+
+def test_a_set_that_does_not_persist_writes_nothing():
+    # A dry run still reads what is stored, so its plan is realistic, but leaves nothing behind.
+    storage = CountingMemoryStorage()
+    storage.manifests["pics"] = manifest_data(**{"0001.jpg": entry("u1")})
+    manifests = ManifestSet(storage, "pics", persist=False)
+    manifests.collection("creator")
+    manifests.touch(manifests.main)
+    assert manifests.flush(force=True) is None
+    assert manifests.main.knows_url("u1") is True  # ...but it did read
+    assert storage.manifest_writes == 0
+    assert storage.files == {}  # no folder was prepared either

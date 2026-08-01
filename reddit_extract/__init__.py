@@ -19,7 +19,7 @@ Quick start::
 
 import logging
 
-from reddit_extract.storage.manifest import Manifest
+from reddit_extract.storage.manifest import Manifest, ManifestSet
 
 from .core.browser import BrowserManager, FetchResult
 from .core.context import ExtractionContext
@@ -52,7 +52,13 @@ from .models import (
     UserProfile,
     parse_source,
 )
-from .storage import FilesystemStorage, MemoryStorage, StorageBackend
+from .storage import (
+    FilesystemStorage,
+    MemoryStorage,
+    StorageBackend,
+    media_filename,
+    slugify,
+)
 
 # A library shouldn't configure logging for its host; this keeps the stdlib's "no handlers could be found" warning away
 # while leaving the choice to the caller. The CLI attaches a real handler for --verbose / --log-level.
@@ -74,6 +80,7 @@ __all__ = [
     "ImageHandler",
     "LinkImageHandler",
     "Manifest",
+    "ManifestSet",
     "MediaCandidate",
     "MediaHandler",
     "MediaItem",
@@ -94,6 +101,8 @@ __all__ = [
     "UserProfile",
     "VideoHandler",
     "default_handlers",
+    "media_filename",
     "parse_source",
+    "slugify",
     "__version__",
 ]

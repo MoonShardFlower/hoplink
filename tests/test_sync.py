@@ -78,7 +78,7 @@ def test_extract_forwards_events(rex):
         media_types=MediaType.ALL,
         events=Events(on_media_saved=lambda src, item: saved.append(item.filename)),
     )
-    assert saved == ["0001.jpg", "0002.jpg"]
+    assert saved == ["0001_photo_a.jpg", "0002_photo_b.jpg"]
 
 
 def test_extract_forwards_an_output_dir(tmp_path):
@@ -90,7 +90,7 @@ def test_extract_forwards_an_output_dir(tmp_path):
         extractor.extract("r/pics", media_types=MediaType.ALL, output_dir=str(tmp_path))
     finally:
         extractor.close()
-    assert (tmp_path / "pics" / "0001.jpg").read_bytes() == b"imagebytes"
+    assert (tmp_path / "pics" / "0001_photo_a.jpg").read_bytes() == b"imagebytes"
 
 
 def test_the_config_is_the_engines(rex):

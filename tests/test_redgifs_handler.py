@@ -401,6 +401,27 @@ async def test_scrape_all_pages_the_whole_profile():
     assert all(x.media_type is MediaType.VIDEO and x.ext == "mp4" for x in candidates)
 
 
+async def test_a_scraped_profile_is_tagged_as_its_uploaders_collection():
+    # A profile is a collection: the pipeline stores it in a folder of its own, under its own manifest.
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD, SD], pages=1),
+        },
+        scrape_all=True,
+    )
+    candidates = await RedGifsHandler().resolve(rg_post(), ctx)
+    assert [x.collection for x in candidates] == ["creator", "creator"]
+
+
+async def test_a_single_clip_belongs_to_no_collection():
+    # Without scrape-all the post yields one file, which belongs beside the source's others.
+    ctx = FakeContext({AUTH_URL: token_result(), gif_api_url(GID): gif_by("creator")})
+    candidates = await RedGifsHandler().resolve(rg_post(), ctx)
+    assert [x.collection for x in candidates] == [None]
+
+
 async def test_paging_paces_with_api_pause_not_the_scroll_pause():
     ctx = FakeContext(
         {
@@ -476,6 +497,7 @@ async def test_scrape_all_falls_back_when_the_profile_reads_empty():
     )
     candidates = await RedGifsHandler().resolve(rg_post(), ctx)
     assert [x.url for x in candidates] == [HD]  # empty profile: keep the linked clip
+    assert candidates[0].collection is None  # ...beside the source's other files
 
 
 async def test_scrape_all_falls_back_when_a_profile_page_request_fails():

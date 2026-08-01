@@ -17,9 +17,9 @@ default chain, so a RedGIFs post is claimed here instead of by them.
 
 **Scrape-all.** With ``config.redgifs_scrape_all`` set the clip's ``userName`` is read, and the uploader's whole
 RedGIFs profile is paged (``/v2/users/<name>/search``) so every one of their clips is downloaded, not just the one
-Reddit linked. Each profile is scraped at most once per run: the handler keeps an in-memory set of profiles already
-seen and skips any uploader it has handled. (The manifest still de-duplicates across runs by URL, so a later run only
-fetches new clips.)
+Reddit linked. Those candidates name the uploader as their *collection*, so the all files of the profile are stored in
+their own folder (``<source>/<uploader>/``). Each profile is scraped at most once per run: the handler keeps an
+in-memory set of profiles already seen and skips any uploader it has handled.
 
 **Blacklist.** ``config.redgifs_blacklist`` If a clip's metadata names a ``userName`` on that list, the post is skipped
 before anything is downloaded. Anonymous uploads carry no username and are not blocked.
@@ -264,8 +264,8 @@ class RedGifsHandler(MediaHandler):
             ctx: The active extraction context.
 
         Returns:
-            One candidate per clip in the uploader's profile; ``[]`` when that profile was already scraped this run; or
-            None to signal "no profile to scrape" so the caller falls back to the single linked clip.
+            One candidate per clip in the uploader's profile, each tagged with the uploader as its collection.
+            ``[]`` when the profile was already scraped this run or None as "no profile to scrape found" signal.
         """
         user = parse_username(gif_body)
         if user is None:
@@ -277,9 +277,9 @@ class RedGifsHandler(MediaHandler):
 
         urls = await self._page_user(user, ctx)
         if not urls:
-            return None  # profile unreadable/empty: fall back to the single linked clip
+            return None  # profile unreadable/empty
         log.debug("redgifs @%s: %d clips", user, len(urls))
-        return [self._candidate(u) for u in urls]
+        return [self._candidate(u, collection=user) for u in urls]
 
     async def _page_user(self, user: str, ctx: "ExtractionContext") -> List[str]:
         """Walk every page of a user's clips, returning their MP4 URLs (de-duplicated, in order)."""
@@ -306,13 +306,16 @@ class RedGifsHandler(MediaHandler):
                 await ctx.sleep(ctx.config.api_pause)
         return urls
 
-    def _candidate(self, url: str) -> MediaCandidate:
-        """Wrap a RedGIFs MP4 URL as a video MediaCandidate."""
+    def _candidate(
+        self, url: str, *, collection: Optional[str] = None
+    ) -> MediaCandidate:
+        """Wrap a RedGIFs MP4 URL as a video MediaCandidate, optionally belonging to an uploader's collection."""
         return MediaCandidate(
             url=url,
             media_type=self.media_type,
             ext="mp4",
             content_prefixes=VIDEO_CONTENT_PREFIXES,
+            collection=collection,
         )
 
     async def _authed_get(
