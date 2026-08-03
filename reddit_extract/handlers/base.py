@@ -34,13 +34,18 @@ class MediaHandler(abc.ABC):
     """Resolves one kind of post into downloadable media candidates.
 
     Attributes:
-        media_type: The MediaType flag this handler serves, used for selection and filtering.
+        media_type: The MediaType this handler serves. Used for selection: the handler is considered only when the
+            job asked for something it serves. It may be a combination (``IMAGE | GALLERY``) for a handler that
+            resolves several kinds, and an instance may set its own in ``__init__`` when what it can produce depends on
+            how it was configured.
         metadata_only: True for handlers that record a matched post but never produce files. No built-in handler
             sets this (text and poll posts are saved as Markdown documents). It remains for custom handlers.
+        fallback: True for a catch-all that should only be consulted once every other handler has passed on the post.
     """
 
-    media_type: ClassVar[MediaType]
+    media_type: MediaType
     metadata_only: ClassVar[bool] = False
+    fallback: ClassVar[bool] = False
 
     @abc.abstractmethod
     def can_handle(self, post: Post) -> bool:

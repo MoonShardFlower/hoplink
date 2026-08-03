@@ -194,7 +194,7 @@ class AsyncRedditExtractor:
         self._storage = storage
         self._storage_explicit = storage is not None
         self._handlers: List[MediaHandler] = (
-            list(handlers) if handlers is not None else default_handlers()
+            list(handlers) if handlers is not None else default_handlers(cfg)
         )
         self._events = events or Events()
         self._post_filter = post_filter
@@ -443,6 +443,10 @@ class AsyncRedditExtractor:
         """
         Return the first handler that both wants ``post`` and is requested.
 
+        Specific handlers are offered the post before catch-alls: a handler marked ``fallback`` (`LinkImageHandler`
+        claims every link post) is consulted once every other one has passed. Registration order decides precedence
+        *within* each group, and a new host-specific handler cannot be shadowed by the catch-all.
+
         Args:
             post: The harvested post to match.
             wanted: The media types requested for this job.
@@ -450,9 +454,12 @@ class AsyncRedditExtractor:
         Returns:
             The selected handler, or None if no handler applies.
         """
-        for handler in self._handlers:
-            if (handler.media_type & wanted) and handler.can_handle(post):
-                return handler
+        for fallback in (False, True):
+            for handler in self._handlers:
+                if handler.fallback is not fallback:
+                    continue
+                if (handler.media_type & wanted) and handler.can_handle(post):
+                    return handler
         return None
 
     async def _harvest(
@@ -790,6 +797,7 @@ class AsyncRedditExtractor:
             events=ev,
             browser=self._browser,
             page=page,
+            wanted=wanted,
             state=self._state,
         )
         try:

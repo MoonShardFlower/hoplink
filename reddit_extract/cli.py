@@ -8,15 +8,16 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any, Iterable, List, Mapping
 
 from . import __version__
 from .config_file import EXTRACTOR_ONLY_KEYS, load_config_file
 from .core.sync import RedditExtractor
 from .events import Events
 from .exceptions import ConfigFileError, RedditExtractError
+from .handlers import default_resolvers
 from .models.config import DEFAULT_FORMATS, DEFAULT_UA, ExtractorConfig
-from .models.filters import PostFilter
+from .models.filters import PostFilter, coerce_str_list
 from .models.media import MediaType
 from .models.result import ExtractionResult
 from .models.source import Source, parse_source
@@ -111,6 +112,101 @@ def _add_filter_arguments(p: argparse.ArgumentParser) -> None:
     g.add_argument(
         "--skip-stickied", action="store_true", help="Drop stickied/pinned posts."
     )
+
+
+def _split_pair(
+    text: str, sep: str, flag: str, shape: str, parser: argparse.ArgumentParser
+) -> tuple[str, str]:
+    """
+    Split ``HOST:REST``-style option text once, erroring out with the expected shape when it doesn't fit.
+
+    Args:
+        text: The raw option value.
+        sep: The separator to split on, once, at its first occurrence.
+        flag: The flag being parsed, named in the error message.
+        shape: The shape the flag expects, shown in the error message.
+        parser: The parser, used to exit with a usage message.
+
+    Returns:
+        The ``(head, tail)`` pair, the head trimmed and lower-cased.
+    """
+    head, found, tail = text.partition(sep)
+    if not found or not head.strip() or not tail.strip():
+        parser.error("{} expects {}, got {!r}".format(flag, shape, text))
+    return head.strip().lower(), tail.strip()
+
+
+def scrape_all_media_types(hosts: Iterable[str]) -> MediaType:
+    """
+    The media types that scraping ``hosts`` in full would produce.
+
+    Asking for a host's whole profile is pointless if the run doesn't want the kind of media it serves, so the CLI
+    ORs this into ``--types``.
+
+    Args:
+        hosts: The host names being scraped in full.
+
+    Returns:
+        The combined MediaType, empty when no registered resolver serves any of them.
+    """
+    wanted = set(hosts)
+    combined = MediaType(0)
+    for resolver in default_resolvers():
+        if resolver.host in wanted:
+            combined |= resolver.media_type
+    return combined
+
+
+def build_host_options(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> dict[str, dict[str, Any]]:
+    """
+    Assemble the per-host settings from ``--blacklist`` and ``--host-option``.
+
+    Args:
+        args: The parsed namespace.
+        parser: The parser, used to exit with a usage message on a malformed value.
+
+    Returns:
+        ``{host: {key: value}}``, empty when none were given.
+    """
+    options: dict[str, dict[str, Any]] = {}
+    for entry in args.blacklist or ():
+        host, names = _split_pair(entry, ":", "--blacklist", "HOST:NAMES", parser)
+        options.setdefault(host, {})["blacklist"] = names
+    for entry in args.host_option or ():
+        host, rest = _split_pair(entry, ":", "--host-option", "HOST:KEY=VALUE", parser)
+        key, value = _split_pair(rest, "=", "--host-option", "HOST:KEY=VALUE", parser)
+        options.setdefault(host, {})[key] = value
+    return options
+
+
+def merge_host_options(
+    from_file: Any, from_cli: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """
+    Layer the command line's per-host settings over a config file's, key by key.
+
+    Both sources describe the same nested mapping, so a whole-value override would make a single
+    ``--host-option`` silently discard every option the file set for that host.
+
+    Args:
+        from_file: The config file's ``host_options`` table, or None.
+        from_cli: What `build_host_options` assembled.
+
+    Returns:
+        The merged mapping.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    if isinstance(from_file, Mapping):
+        merged = {
+            str(host): dict(values)
+            for host, values in from_file.items()
+            if isinstance(values, Mapping)
+        }
+    for host, values in from_cli.items():
+        merged.setdefault(host, {}).update(values)
+    return merged
 
 
 def build_post_filter(args: argparse.Namespace) -> PostFilter:
@@ -256,17 +352,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip a download whose content hash matches a file already saved for the source (catches reposts).",
     )
     p.add_argument(
-        "--redgifs-scrape-all",
-        action="store_true",
-        help="For each RedGIFs post, scrape the uploader's entire RedGIFs profile, not just the "
-        "linked clip. Each profile is scraped at most once per run. Implies --types video.",
+        "--scrape-all",
+        metavar="HOSTS",
+        default=None,
+        help="Comma-separated external hosts whose posts are followed out to the uploader's entire "
+        "profile, not just the linked item (e.g. redgifs). Each profile is scraped at most once per "
+        "run. Implies the media types those hosts serve.",
     )
     p.add_argument(
-        "--redgifs-blacklist",
-        metavar="NAMES",
+        "--blacklist",
+        metavar="HOST:NAMES",
+        action="append",
         default=None,
-        help="Comma-separated RedGIFs uploader names never to download (case-insensitive). A post "
-        "whose RedGIFs uploader is listed here is skipped, in both single-clip and scrape-all mode.",
+        help="Uploaders never to download, per host, e.g. --blacklist redgifs:alice,bob "
+        "(case-insensitive). Repeatable, once per host. Applies in both single-item and scrape-all mode.",
+    )
+    p.add_argument(
+        "--host-option",
+        metavar="HOST:KEY=VALUE",
+        action="append",
+        default=None,
+        help="A per-host setting, e.g. --host-option imgur:client_id=abc123. Repeatable.",
+    )
+    p.add_argument(
+        "--follow-links",
+        action="store_true",
+        help="Resolve links found in the body of text posts, so a self post pointing at a supported "
+        "external host also yields that host's media. Costs a page visit per text post.",
     )
     _add_filter_arguments(p)
     p.add_argument(
@@ -566,9 +678,9 @@ def main(argv: List[str] | None = None) -> int:
         parser.error(str(exc))
     if not media_types:
         parser.error("--types must name at least one media type")
-    # RedGIFs clips are video; scraping profiles is pointless if video isn't wanted, so opt it in.
-    if args.redgifs_scrape_all:
-        media_types |= MediaType.VIDEO
+    # Scraping a host's profiles is pointless if the kind of media it serves isn't wanted, so opt it in.
+    scrape_all_hosts = coerce_str_list(args.scrape_all)
+    media_types |= scrape_all_media_types(scrape_all_hosts)
 
     try:
         post_filter = build_post_filter(args)
@@ -585,6 +697,11 @@ def main(argv: List[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    # Both a config file and the command line can carry per-host settings, so they are merged
+    host_options = merge_host_options(
+        extractor_overrides.pop("host_options", None),
+        build_host_options(args, parser),
+    )
     try:
         config = ExtractorConfig(
             formats=args.formats,
@@ -599,8 +716,9 @@ def main(argv: List[str] | None = None) -> int:
             max_stale_scrolls=args.max_stale_scrolls,
             max_retries=args.max_retries,
             dedupe_by_hash=args.dedupe,
-            redgifs_scrape_all=args.redgifs_scrape_all,
-            redgifs_blacklist=args.redgifs_blacklist,
+            scrape_all_hosts=scrape_all_hosts,
+            host_options=host_options,
+            follow_text_links=args.follow_links,
             # Advanced knobs a config file may set (viewport, locale, timeouts, ...).
             # Empty for a plain command line. None overlaps the keywords above.
             **extractor_overrides,

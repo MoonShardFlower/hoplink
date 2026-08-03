@@ -16,9 +16,15 @@ log = logging.getLogger(__name__)
 
 
 class LinkImageHandler(MediaHandler):
-    """``link`` posts kept only when the target is itself an image file."""
+    """
+    ``link`` posts kept only when the target is itself an image file.
+
+    This is the catch-all for external links: it claims any link post, so it is marked as a fallback and used only once
+    every host-specific handler has passed.
+    """
 
     media_type = MediaType.LINK
+    fallback = True
 
     def can_handle(self, post: Post) -> bool:
         """Match ``link`` posts that carry a content href."""

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
-from typing import Any, Iterable, Union
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping, Union
 
 from .media import MediaType
 
@@ -28,13 +29,23 @@ class ExtractorConfig:
     formats: tuple[str, ...] = DEFAULT_FORMATS
     #: media types extracted when a call doesn't specify any
     default_media_types: MediaType = MediaType.IMAGE | MediaType.GALLERY
-    #: when a RedGIFs post is found, scrape the uploader's whole RedGIFs profile instead of just the linked clip.
-    # Each profile is scraped at most once per run (a repeat uploader in the same listing is skipped, not re-scraped).
-    redgifs_scrape_all: bool = False
-    #: RedGIFs usernames whose clips are never downloaded (comma string or iterable, case-insensitive).
-    # Posts from these RedGIFs users are skipped in both single-clip and scrape-all mode.
-    # Anonymous uploads carry no username and are not blocked by this list.
-    redgifs_blacklist: tuple[str, ...] = ()
+
+    # -- external hosts -------------------------------------------------
+    #: hosts whose posts are followed out to the uploader's whole profile rather than just the linked item
+    # (comma string or iterable, e.g. ``"redgifs"``). Each profile is scraped at most once per run: a repeat
+    # uploader in the same listing is skipped.
+    scrape_all_hosts: tuple[str, ...] = ()
+    #: per-host settings, keyed by the host a handler serves::
+    #
+    #     host_options={"imgur": {"client_id": "..."}, "redgifs": {"blacklist": "alice,bob"}}
+    #
+    # A ``blacklist`` entry names uploaders whose media is never downloaded, in both single-item and scrape-all
+    # mode (anonymous uploads carry no name and are not blocked). Other keys are the host handler's own business;
+    # unknown hosts and unknown keys are ignored.
+    host_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    #: resolve links found in the body of a text post, so a self post pointing at an external host yields that
+    # host's media alongside the post's Markdown document.
+    follow_text_links: bool = False
 
     # -- browser --------------------------------------------------------
     headless: bool = True
@@ -94,16 +105,8 @@ class ExtractorConfig:
             f.strip().lower().lstrip(".") for f in formats if f and f.strip()
         )
         object.__setattr__(self, "formats", normalized)
-        blacklist: Union[str, Iterable[str], None] = self.redgifs_blacklist
-        if blacklist is None:
-            blacklist = ()
-        elif isinstance(blacklist, str):
-            blacklist = blacklist.split(",")
-        object.__setattr__(
-            self,
-            "redgifs_blacklist",
-            tuple(name.strip().lower() for name in blacklist if name and name.strip()),
-        )
+        object.__setattr__(self, "scrape_all_hosts", self._names(self.scrape_all_hosts))
+        self._normalize_host_options()
         object.__setattr__(
             self, "default_media_types", MediaType.coerce(self.default_media_types)
         )
@@ -121,6 +124,34 @@ class ExtractorConfig:
         )
         if self.gallery_wait_ms < 0:
             raise ValueError("gallery_wait_ms must be >= 0")
+
+    @staticmethod
+    def _names(value: Union[str, Iterable[str], None]) -> tuple[str, ...]:
+        """Normalize a comma string or iterable of names into a trimmed, lower-cased tuple."""
+        if value is None:
+            return ()
+        parts: Iterable[str] = value.split(",") if isinstance(value, str) else value
+        return tuple(name.strip().lower() for name in parts if name and name.strip())
+
+    def _normalize_host_options(self) -> None:
+        """
+        Freeze ``host_options`` into a read-only mapping of read-only mappings.
+
+        Host names are lower-cased so ``"RedGifs"`` == ``"redgifs"``. Entries that aren't mappings are dropped.
+        """
+        source: Mapping[str, Any] = self.host_options or {}
+        options: dict[str, dict[str, Any]] = {
+            str(host).strip().lower(): dict(values)
+            for host, values in source.items()
+            if isinstance(values, Mapping)
+        }
+        object.__setattr__(
+            self,
+            "host_options",
+            MappingProxyType(
+                {host: MappingProxyType(values) for host, values in options.items()}
+            ),
+        )
 
     def _require_non_negative(self, *names: str) -> None:
         """Raise ValueError if any named field is negative."""

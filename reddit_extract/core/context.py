@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 from ..events import Events, emit
 from ..models.config import ExtractorConfig
+from ..models.filters import coerce_str_list
+from ..models.media import MediaType
 from ..models.source import Source
 from .http import is_transient
 from .state import HostState, SharedState
@@ -24,14 +26,16 @@ class ExtractionContext:
     """
     The interface a handler may use while resolving a post.
 
-    Handlers should stick to `evaluate_on`, `fetch`, `download`, `skip`, `sleep`, `state`, and the
-    ``config``/``formats`` attributes. ``page`` and ``browser_context`` are escape hatches for advanced handlers.
+    Handlers should stick to `evaluate_on`, `fetch`, `download`, `skip`, `sleep`, `state`, the host-option helpers,
+    and the ``config``/``formats``/``wanted`` attributes. ``page`` and ``browser_context`` are escape hatches for
+    advanced handlers.
 
     Attributes:
         source: The source currently being extracted.
         config: The active ExtractorConfig.
         events: Progress callbacks for this job.
         formats: Accepted image extensions, as a frozen set.
+        wanted: The media types this job was asked for. A handler should consult it before doing expensive work.
         page: The already-navigated listing page.
     """
 
@@ -43,6 +47,7 @@ class ExtractionContext:
         events: Events,
         browser: "BrowserManager",
         page: Any,
+        wanted: MediaType = MediaType.ALL,
         state: SharedState | None = None,
     ) -> None:
         """Build a context for one extraction job.
@@ -53,12 +58,14 @@ class ExtractionContext:
             events: Progress callbacks for this job.
             browser: The shared browser manager.
             page: The listing page, already navigated to the source's URL.
+            wanted: The media types requested for this job.
             state: The extractor's shared handler state. A fresh, job-local store is used when None.
         """
         self.source = source
         self.config = config
         self.events = events
         self.formats = frozenset(config.formats)
+        self.wanted = wanted
         self.page = page  #: the listing page (already navigated)
         self._browser = browser
         self._util_page: Any = None
@@ -176,6 +183,40 @@ class ExtractionContext:
             The namespace's HostState (its ``data`` dict and the ``lock`` guarding it).
         """
         return self._state.namespace(namespace)
+
+    def host_option(self, host: str, key: str, default: Any = None) -> Any:
+        """
+        One of a host's configured options, from ``config.host_options``.
+
+        Args:
+            host: The host the option belongs to (``"imgur"``).
+            key: The option's name (``"client_id"``).
+            default: Returned when the host or the option is not configured.
+
+        Returns:
+            The configured value, or ``default``.
+        """
+        return self.config.host_options.get(host, {}).get(key, default)
+
+    def host_list(self, host: str, key: str) -> tuple[str, ...]:
+        """
+        A host option read as a normalized list of names.
+
+        Accepts what config files and command lines produce alike: a comma-separated string or an iterable.
+        Entries are trimmed, lower-cased, and blanks dropped, which is what a name comparison wants.
+
+        Args:
+            host: The host the option belongs to.
+            key: The option's name (``"blacklist"``).
+
+        Returns:
+            The names, empty when the option is not configured.
+        """
+        return coerce_str_list(self.host_option(host, key))
+
+    def scrape_all(self, host: str) -> bool:
+        """Whether this run should follow ``host``'s links out to the uploader's whole profile."""
+        return host in self.config.scrape_all_hosts
 
     async def skip(self, url: str, reason: str) -> None:
         """

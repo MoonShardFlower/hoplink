@@ -21,6 +21,10 @@ Example ``myjob.toml``::
     locale         = "en-US"
     nav_timeout_ms = 90000
 
+    # per-host settings, as a table per host:
+    [host_options.redgifs]
+    blacklist = ["alice", "bob"]
+
 Precedence at runtime is ``explicit CLI argument > config file > built-in default``: anything you type on the command
 line overrides the file. One caveat follows from argparse's boolean flags -- ``dry_run``, ``show`` and ``quiet`` can
 be turned *on* by a config file, but a plain command line cannot turn them back *off* (there are no ``--no-*`` flags).
@@ -39,6 +43,7 @@ from .exceptions import ConfigFileError
 EXTRACTOR_ONLY_KEYS = frozenset(
     {
         "default_media_types",
+        "host_options",
         "viewport",
         "locale",
         "manifest_flush_every",
