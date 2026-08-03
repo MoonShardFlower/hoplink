@@ -8,19 +8,23 @@ from __future__ import annotations
 
 from typing import Any, List
 
+import pytest
+
 from reddit_extract.core.context import ExtractionContext
 from reddit_extract.handlers import (
     CrosspostHandler,
+    ExternalLinkHandler,
     GalleryHandler,
     ImageHandler,
     LinkImageHandler,
+    LinkResolver,
     PollHandler,
-    RedGifsHandler,
     TextHandler,
     VideoHandler,
     default_handlers,
 )
 from reddit_extract.handlers.base import MediaHandler
+from reddit_extract.handlers.text import body_links, unwrap_redirect
 from reddit_extract.models.media import MediaCandidate, MediaType
 from reddit_extract.models.post import Post
 
@@ -320,28 +324,31 @@ def test_the_default_chain_is_in_selection_order():
     assert [type(h) for h in default_handlers()] == [
         ImageHandler,
         GalleryHandler,
-        RedGifsHandler,
+        ExternalLinkHandler,
         VideoHandler,
-        LinkImageHandler,
         CrosspostHandler,
         TextHandler,
         PollHandler,
+        LinkImageHandler,
     ]
 
 
-def test_the_link_handler_comes_after_the_specific_ones():
-    # LinkImageHandler is the catch-all for external hosts; it must not shadow i.redd.it posts.
-    order = [type(h) for h in default_handlers()]
-    assert order.index(LinkImageHandler) > order.index(ImageHandler)
-    assert order.index(LinkImageHandler) > order.index(VideoHandler)
+def test_the_link_handler_is_the_chains_only_fallback():
+    # LinkImageHandler claims every link post, so it is consulted only once the specific handlers have passed.
+    fallbacks = [type(h) for h in default_handlers() if h.fallback]
+    assert fallbacks == [LinkImageHandler]
 
 
-def test_redgifs_outranks_video_and_link():
-    # A RedGIFs post must be claimed by RedGifsHandler (which recovers audio), not
-    # by a silent v.redd.it rehost or the external-link catch-all.
+def test_external_hosts_outrank_video():
+    # A RedGIFs post must be claimed by the external-host handler (which recovers the audio), not by a silent v.redd.it rehost.
     order = [type(h) for h in default_handlers()]
-    assert order.index(RedGifsHandler) < order.index(VideoHandler)
-    assert order.index(RedGifsHandler) < order.index(LinkImageHandler)
+    assert order.index(ExternalLinkHandler) < order.index(VideoHandler)
+
+
+def test_the_external_handler_covers_redgifs():
+    assert ExternalLinkHandler().can_handle(
+        post(type="link", content_href="https://www.redgifs.com/watch/somecliphere")
+    )
 
 
 def test_each_call_hands_out_fresh_instances():
@@ -349,10 +356,18 @@ def test_each_call_hands_out_fresh_instances():
     assert default_handlers()[0] is not default_handlers()[0]
 
 
-def test_every_default_handler_declares_a_single_media_type():
+def test_every_default_handler_declares_a_media_type_it_serves():
     for handler in default_handlers():
         assert isinstance(handler.media_type, MediaType)
-        assert handler.media_type.name is not None  # not a combined flag
+        assert handler.media_type  # not the empty flag: it would never be selected
+
+
+def test_the_text_handler_only_widens_its_types_when_following_links():
+    # Following body links means text posts can answer for the hosts' media types too
+    assert TextHandler().media_type is MediaType.TEXT
+    following = TextHandler(follow_links=True)
+    assert following.media_type & MediaType.TEXT
+    assert following.media_type & MediaType.VIDEO  # RedGIFs, via the default resolvers
 
 
 # -- MediaHandler.name ------------------------------------------------------
@@ -373,3 +388,152 @@ def test_a_custom_handler_reports_its_own_name():
             return []
 
     assert StickerHandler().name == "StickerHandler"
+
+
+# -- text posts: reading the links out of a body ----------------------------
+
+
+def test_a_bodys_anchors_are_collected_in_order():
+    raw = {"text": "see these", "links": ["https://a.test/1", "https://b.test/2"]}
+    assert body_links(raw) == ["https://a.test/1", "https://b.test/2"]
+
+
+def test_a_repeated_link_is_collected_once():
+    raw = {"text": "", "links": ["https://a.test/1", "https://a.test/1"]}
+    assert body_links(raw) == ["https://a.test/1"]
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "mailto:someone@example.com",
+        "javascript:alert(1)",
+        "/r/pics/comments/x/",  # relative: a.href resolves these, but a bare one is not fetchable
+        "",
+    ],
+)
+def test_a_link_that_is_not_fetchable_is_dropped(link):
+    assert body_links({"links": [link, "https://a.test/1"]}) == ["https://a.test/1"]
+
+
+@pytest.mark.parametrize("raw", [None, "just the text", {}, {"links": "nope"}, 42])
+def test_a_body_with_no_usable_links_yields_none(raw):
+    assert body_links(raw) == []
+
+
+def test_reddits_outbound_wrapper_is_unwrapped():
+    wrapped = "https://out.reddit.com/r/x?url=https%3A%2F%2Fa.test%2F1&token=abc"
+    assert unwrap_redirect(wrapped) == "https://a.test/1"
+
+
+def test_a_wrapper_with_no_target_is_left_alone():
+    assert unwrap_redirect("https://out.reddit.com/r/x") == "https://out.reddit.com/r/x"
+
+
+def test_an_ordinary_link_is_left_alone():
+    assert unwrap_redirect("https://a.test/1") == "https://a.test/1"
+
+
+# -- text posts: following those links --------------------------------------
+
+
+class AudioResolver(LinkResolver):
+    """A host serving audio, recording what it was asked to resolve."""
+
+    host = "audiohost"
+    domains = ("audio.test",)
+    media_type = MediaType.AUDIO
+
+    def __init__(self) -> None:
+        self.calls: List[str] = []
+
+    async def resolve(self, url: str, ctx: Any, *, ref: str) -> List[MediaCandidate]:
+        self.calls.append(url)
+        return [MediaCandidate(url + ".m4a", MediaType.AUDIO, ext="m4a")]
+
+
+class FakeBodyContext(FakePageContext):
+    """A page context that also carries the job's wanted media types."""
+
+    def __init__(self, page_result=None, wanted: MediaType = MediaType.ALL) -> None:
+        super().__init__(page_result if page_result is not None else {})
+        self.wanted = wanted
+
+
+def body(text: str = "listen", links: List[str] | None = None) -> dict:
+    return {"text": text, "links": links or []}
+
+
+async def test_without_following_a_text_post_is_just_its_document():
+    ctx = FakeBodyContext(body(links=["https://audio.test/t/1"]))
+    candidates = await TextHandler().resolve(text_post(), ctx)
+    assert [c.ext for c in candidates] == ["md"]
+
+
+async def test_a_followed_body_link_yields_the_hosts_media_beside_the_document():
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(body(links=["https://audio.test/t/1"]))
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert [(c.media_type, c.ext) for c in candidates] == [
+        (MediaType.TEXT, "md"),
+        (MediaType.AUDIO, "m4a"),
+    ]
+    assert resolver.calls == ["https://audio.test/t/1"]
+
+
+async def test_every_registered_link_in_one_body_is_followed():
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(
+        body(links=["https://audio.test/t/1", "https://audio.test/t/2"])
+    )
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert len(candidates) == 3  # the document plus both tracks
+    assert resolver.calls == ["https://audio.test/t/1", "https://audio.test/t/2"]
+
+
+async def test_a_link_to_an_unregistered_host_is_never_fetched():
+    # The registry is the allowlist: a post body is written by anyone.
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(body(links=["https://stranger.test/whatever"]))
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert [c.ext for c in candidates] == ["md"]
+    assert resolver.calls == []
+
+
+async def test_asking_only_for_the_linked_media_leaves_the_documents_behind():
+    # The shape r/gonewildaudio needs: the audio is what was wanted, not a folder of Markdown files.
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(
+        body(links=["https://audio.test/t/1"]), wanted=MediaType.AUDIO
+    )
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert [c.media_type for c in candidates] == [MediaType.AUDIO]
+
+
+async def test_asking_only_for_text_keeps_the_document_and_skips_the_hosts():
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(body(links=["https://audio.test/t/1"]), wanted=MediaType.TEXT)
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert [c.media_type for c in candidates] == [MediaType.TEXT]
+    assert resolver.calls == []  # its API was not called just to discard the answer
+
+
+async def test_a_page_that_will_not_load_still_yields_the_document():
+    resolver = AudioResolver()
+    ctx = FakeBodyContext(RuntimeError("Timeout"))
+    handler = TextHandler(follow_links=True, resolvers=[resolver])
+    candidates = await handler.resolve(text_post(), ctx)
+    assert [c.ext for c in candidates] == ["md"]
+    assert resolver.calls == []
+
+
+async def test_the_document_still_carries_the_body_text_when_following():
+    ctx = FakeBodyContext(body(text="Here is the body.", links=[]))
+    handler = TextHandler(follow_links=True, resolvers=[AudioResolver()])
+    cand = (await handler.resolve(text_post(), ctx))[0]
+    assert "Here is the body." in cand.body.decode("utf-8")

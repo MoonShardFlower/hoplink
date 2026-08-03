@@ -353,7 +353,7 @@ def test_no_sources_exits_with_usage(capsys):
 
 def test_an_unknown_media_type_exits_with_usage(capsys):
     with pytest.raises(SystemExit) as exc:
-        cli.main(["r/pics", "--types", "audio"])
+        cli.main(["r/pics", "--types", "sculpture"])
     assert exc.value.code == 2
     assert "unknown media type" in capsys.readouterr().err
 

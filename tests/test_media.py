@@ -73,20 +73,15 @@ def test_repeating_a_type_is_harmless():
 
 
 def test_all_is_every_single_type_combined():
-    assert MediaType.ALL == (
-        MediaType.IMAGE
-        | MediaType.GALLERY
-        | MediaType.VIDEO
-        | MediaType.TEXT
-        | MediaType.LINK
-        | MediaType.POLL
-        | MediaType.CROSSPOST
-    )
+    combined = MediaType(0)
+    for member in MediaType:
+        combined |= member
+    assert MediaType.ALL == combined
 
 
 def test_an_unknown_name_is_rejected_and_lists_the_allowed_ones():
-    with pytest.raises(ValueError, match="unknown media type 'audio'") as exc:
-        MediaType.coerce("audio")
+    with pytest.raises(ValueError, match="unknown media type 'sculpture'") as exc:
+        MediaType.coerce("sculpture")
     message = str(exc.value)
     assert all(
         name in message for name in ("image", "gallery", "video", "text", "link", "all")
@@ -94,8 +89,8 @@ def test_an_unknown_name_is_rejected_and_lists_the_allowed_ones():
 
 
 def test_an_unknown_name_inside_a_comma_string_is_rejected():
-    with pytest.raises(ValueError, match="unknown media type 'audio'"):
-        MediaType.coerce("image,audio")
+    with pytest.raises(ValueError, match="unknown media type 'sculpture'"):
+        MediaType.coerce("image,sculpture")
 
 
 def test_a_string_naming_nothing_is_rejected():
@@ -111,12 +106,6 @@ def test_a_string_naming_nothing_is_rejected():
 def test_a_single_type_labels_as_its_lower_case_name():
     assert MediaType.IMAGE.label == "image"
     assert MediaType.ALL.label == "all"
-
-
-def test_a_combined_flag_labels_as_its_composite_name():
-    # Since Python 3.11 a composite Flag still reports a name, so this is what a manifest
-    # would carry. Before that it was nameless and fell back to "mixed".
-    assert (MediaType.IMAGE | MediaType.VIDEO).label == "image|video"
 
 
 def test_the_empty_flag_is_the_only_thing_that_labels_as_mixed():

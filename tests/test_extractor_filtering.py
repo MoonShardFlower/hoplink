@@ -92,9 +92,14 @@ class FakeBrowser:
     async def new_page(self) -> FakePage:
         return FakePage(self.records)
 
-    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def download(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
         # The real manager may route this straight out to the network; a fake has only the one route.
-        return await self.fetch(url, timeout_ms)
+        return await self.fetch(url, timeout_ms, headers)
 
     async def dismiss_gates(self, page: Any) -> None:
         pass

@@ -9,6 +9,8 @@ import pytest
 
 from reddit_extract import cli
 from reddit_extract.config_file import EXTRACTOR_ONLY_KEYS
+from reddit_extract.models.filters import coerce_str_list
+from reddit_extract.models.media import MediaType
 from tests.test_extractor_filtering import FakeBrowser, harvested
 
 
@@ -104,40 +106,6 @@ def test_max_retries_defaults_to_two():
 
 def test_max_retries_flag():
     assert parse(["r/pics", "--max-retries", "5"]).max_retries == 5
-
-
-# -- redgifs scrape-all ----------------------------------------------------
-
-
-def test_redgifs_scrape_all_defaults_off_and_flips_on():
-    assert parse(["r/pics"]).redgifs_scrape_all is False
-    assert parse(["r/pics", "--redgifs-scrape-all"]).redgifs_scrape_all is True
-
-
-def test_redgifs_scrape_all_is_accepted_in_a_config_file(tmp_path):
-    conf = write_toml(tmp_path, 'sources = ["r/gifs"]\nredgifs_scrape_all = true\n')
-    parser = cli.build_parser()
-    cli._load_cli_config(parser, ["--config", str(conf)])
-    assert parser.parse_args(["--config", str(conf)]).redgifs_scrape_all is True
-
-
-def test_redgifs_blacklist_defaults_none_and_takes_a_comma_list():
-    assert parse(["r/pics"]).redgifs_blacklist is None
-    assert parse(["r/pics", "--redgifs-blacklist", "Alice,Bob"]).redgifs_blacklist == (
-        "Alice,Bob"  # raw string; ExtractorConfig splits and lower-cases it
-    )
-
-
-def test_redgifs_blacklist_is_accepted_as_a_list_in_a_config_file(tmp_path):
-    conf = write_toml(
-        tmp_path, 'sources = ["r/gifs"]\nredgifs_blacklist = ["Spammer", "AdBot"]\n'
-    )
-    parser = cli.build_parser()
-    cli._load_cli_config(parser, ["--config", str(conf)])
-    assert parser.parse_args(["--config", str(conf)]).redgifs_blacklist == [
-        "Spammer",
-        "AdBot",
-    ]
 
 
 def test_negative_max_retries_exits_2(capsys):
@@ -347,7 +315,7 @@ def test_main_without_filters_keeps_everything(fake_reddit, tmp_path):
     assert len(fake_reddit.fetched) == 3
 
 
-def test_main_accepts_redgifs_scrape_all(fake_reddit, tmp_path):
+def test_main_accepts_scrape_all(fake_reddit, tmp_path):
     # The canned posts are images, so the flag just opts video in and the run still succeeds.
     code = cli.main(
         [
@@ -358,14 +326,15 @@ def test_main_accepts_redgifs_scrape_all(fake_reddit, tmp_path):
             str(tmp_path / "out"),
             "--delay",
             "0",
-            "--redgifs-scrape-all",
+            "--scrape-all",
+            "redgifs",
         ]
     )
     assert code == 0
     assert len(fake_reddit.fetched) == 3
 
 
-def test_main_accepts_redgifs_blacklist(fake_reddit, tmp_path):
+def test_main_accepts_a_blacklist(fake_reddit, tmp_path):
     # The canned posts are images, so the blacklist matches nothing; this just proves the
     # flag is wired through to ExtractorConfig (which normalizes it) without error.
     code = cli.main(
@@ -377,8 +346,8 @@ def test_main_accepts_redgifs_blacklist(fake_reddit, tmp_path):
             str(tmp_path / "out"),
             "--delay",
             "0",
-            "--redgifs-blacklist",
-            "Spammer,AdBot",
+            "--blacklist",
+            "redgifs:Spammer,AdBot",
         ]
     )
     assert code == 0
@@ -476,3 +445,123 @@ def test_main_filters_from_a_config_file(fake_reddit, tmp_path):
     )
     assert cli.main(["--config", str(conf)]) == 0
     assert fake_reddit.fetched == ["https://i.redd.it/a.jpg"]
+
+
+def hosts_for(argv):
+    """The scrape-all hosts the CLI would configure for ``argv``."""
+    return coerce_str_list(parse(["r/pics"] + argv).scrape_all)
+
+
+def test_no_scrape_all_flag_names_no_hosts():
+    assert hosts_for([]) == ()
+
+
+def test_scrape_all_takes_a_comma_separated_host_list():
+    assert hosts_for(["--scrape-all", "redgifs, Soundgasm"]) == (
+        "redgifs",
+        "soundgasm",
+    )
+
+
+def test_scraping_a_host_in_full_implies_the_media_it_serves():
+    assert cli.scrape_all_media_types(("redgifs",)) is MediaType.VIDEO
+
+
+def test_scraping_an_unknown_host_implies_nothing():
+    assert cli.scrape_all_media_types(("nosuchhost",)) == MediaType(0)
+
+
+def test_scrape_all_widens_the_requested_types():
+    args = parse(["r/gifs", "--types", "image", "--scrape-all", "redgifs"])
+    widened = MediaType.coerce(args.types) | cli.scrape_all_media_types(
+        coerce_str_list(args.scrape_all)
+    )
+    assert widened == MediaType.IMAGE | MediaType.VIDEO
+
+
+def options_for(argv):
+    """The host options the CLI would configure for ``argv``."""
+    parser = cli.build_parser()
+    return cli.build_host_options(parser.parse_args(["r/pics"] + argv), parser)
+
+
+def test_no_host_flags_gives_no_options():
+    assert options_for([]) == {}
+
+
+def test_a_blacklist_is_stored_under_its_host():
+    assert options_for(["--blacklist", "redgifs:Alice,Bob"]) == {
+        "redgifs": {"blacklist": "Alice,Bob"}
+    }
+
+
+def test_blacklists_can_be_given_per_host():
+    assert options_for(
+        ["--blacklist", "redgifs:alice", "--blacklist", "soundgasm:bob"]
+    ) == {"redgifs": {"blacklist": "alice"}, "soundgasm": {"blacklist": "bob"}}
+
+
+def test_a_host_option_is_split_into_host_key_and_value():
+    assert options_for(["--host-option", "imgur:client_id=abc123"]) == {
+        "imgur": {"client_id": "abc123"}
+    }
+
+
+def test_a_host_option_value_may_contain_an_equals_sign():
+    assert options_for(["--host-option", "imgur:token=a=b=c"]) == {
+        "imgur": {"token": "a=b=c"}
+    }
+
+
+def test_options_for_one_host_accumulate():
+    assert options_for(
+        ["--blacklist", "redgifs:alice", "--host-option", "redgifs:quality=hd"]
+    ) == {"redgifs": {"blacklist": "alice", "quality": "hd"}}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--blacklist", "noseparator"],
+        ["--blacklist", "redgifs:"],
+        ["--blacklist", ":alice"],
+        ["--host-option", "imgur:novalue"],
+        ["--host-option", "imgur:=abc"],
+        ["--host-option", "noseparator"],
+    ],
+)
+def test_a_malformed_host_flag_exits_with_usage(argv):
+    with pytest.raises(SystemExit) as exc:
+        options_for(argv)
+    assert exc.value.code == 2
+
+
+def test_the_command_line_layers_over_a_config_files_host_options():
+    merged = cli.merge_host_options(
+        {"imgur": {"client_id": "from-file", "quality": "hd"}},
+        {"imgur": {"client_id": "from-cli"}},
+    )
+    assert merged == {"imgur": {"client_id": "from-cli", "quality": "hd"}}
+
+
+def test_hosts_only_one_source_names_are_kept():
+    merged = cli.merge_host_options(
+        {"imgur": {"client_id": "x"}}, {"redgifs": {"blacklist": "a"}}
+    )
+    assert set(merged) == {"imgur", "redgifs"}
+
+
+@pytest.mark.parametrize("from_file", [None, {}, "nonsense", {"imgur": "nonsense"}])
+def test_a_config_file_with_no_usable_host_options_is_ignored(from_file):
+    assert cli.merge_host_options(from_file, {"redgifs": {"blacklist": "a"}}) == {
+        "redgifs": {"blacklist": "a"}
+    }
+
+
+def test_host_options_are_accepted_in_a_config_file():
+    assert "host_options" in EXTRACTOR_ONLY_KEYS
+
+
+def test_follow_links_defaults_off_and_flips_on():
+    assert parse(["r/pics"]).follow_links is False
+    assert parse(["r/pics", "--follow-links"]).follow_links is True

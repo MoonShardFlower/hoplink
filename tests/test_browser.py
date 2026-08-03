@@ -9,6 +9,7 @@ so those tests patch the imported module and skip if it is absent. The rest inje
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from types import SimpleNamespace
@@ -16,7 +17,13 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.core.browser import GATE_BUTTON_NAMES, BrowserManager, FetchResult
+from reddit_extract.core import browser as browser_module
+from reddit_extract.core.browser import (
+    GATE_BUTTON_NAMES,
+    BrowserManager,
+    FetchResult,
+    HostPacer,
+)
 from reddit_extract.exceptions import BrowserError
 from reddit_extract.models.config import ExtractorConfig
 
@@ -692,3 +699,86 @@ async def test_the_fallback_is_logged(direct, caplog):
     with caplog.at_level(logging.INFO, logger="reddit_extract.core.browser"):
         await started(FakeContext(FakeRequestAPI())).download("https://x/a.mp4")
     assert "refused a direct request" in caplog.text
+
+@pytest.fixture
+def clock(monkeypatch):
+    """A monotonic clock that only moves when something sleeps, so pacing is testable without waiting."""
+    now = {"t": 1000.0}
+    slept: List[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now["t"] += seconds
+
+    monkeypatch.setattr(browser_module.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(browser_module.asyncio, "sleep", fake_sleep)
+    return SimpleNamespace(
+        slept=slept,
+        now=lambda: now["t"],
+        advance=lambda s: now.__setitem__("t", now["t"] + s),
+    )
+
+
+async def test_the_first_request_to_a_host_is_not_delayed(clock):
+    assert await HostPacer().wait("api.example", 2.0) == 0.0
+    assert clock.slept == []
+
+
+async def test_a_second_request_waits_out_the_interval(clock):
+    pacer = HostPacer()
+    await pacer.wait("api.example", 2.0)
+    assert await pacer.wait("api.example", 2.0) == 2.0
+    assert clock.slept == [2.0]
+
+
+async def test_a_host_that_is_already_due_is_not_delayed(clock):
+    pacer = HostPacer()
+    await pacer.wait("api.example", 2.0)
+    clock.advance(5.0)  # more than the interval has passed on its own
+    assert await pacer.wait("api.example", 2.0) == 0.0
+
+
+async def test_hosts_are_paced_independently(clock):
+    pacer = HostPacer()
+    await pacer.wait("api.example", 2.0)
+    assert await pacer.wait("other.example", 2.0) == 0.0
+
+
+async def test_a_zero_interval_disables_pacing(clock):
+    pacer = HostPacer()
+    await pacer.wait("api.example", 0.0)
+    assert await pacer.wait("api.example", 0.0) == 0.0
+    assert clock.slept == []
+
+
+async def test_reset_forgets_a_hosts_last_request(clock):
+    pacer = HostPacer()
+    await pacer.wait("api.example", 2.0)
+    pacer.reset()
+    assert await pacer.wait("api.example", 2.0) == 0.0
+
+
+async def test_concurrent_callers_to_one_host_are_spaced_out(clock):
+    pacer = HostPacer()
+    started_at: List[float] = []
+
+    async def call() -> None:
+        await pacer.wait("api.example", 1.0)
+        started_at.append(clock.now())
+
+    await asyncio.gather(*(call() for _ in range(3)))
+    assert [t - started_at[0] for t in started_at] == [0.0, 1.0, 2.0]
+
+
+async def test_an_api_fetch_is_paced_per_host(clock):
+    mgr = started(FakeContext(FakeRequestAPI()), api_pause=1.5)
+    await mgr.fetch("https://api.example/v1/a")
+    await mgr.fetch("https://api.example/v1/b")
+    assert clock.slept == [1.5]
+
+
+async def test_media_downloads_are_not_host_paced(clock, direct):
+    mgr = started(FakeContext(FakeRequestAPI()), api_pause=1.5, direct_download=False)
+    await mgr.download("https://cdn.example/a.jpg")
+    await mgr.download("https://cdn.example/b.jpg")
+    assert clock.slept == []

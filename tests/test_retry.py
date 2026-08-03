@@ -26,9 +26,11 @@ class FakeContext:
         self.config = config or ExtractorConfig()
         self.formats = frozenset(formats)
         self.fetches: list[str] = []
+        self.headers: list[dict[str, str] | None] = []
 
-    async def download(self, url: str) -> FetchResult:
+    async def download(self, url: str, headers=None) -> FetchResult:
         self.fetches.append(url)
+        self.headers.append(headers)
         # Once the script runs out, keep returning its final outcome.
         return self._results.pop(0) if len(self._results) > 1 else self._results[0]
 

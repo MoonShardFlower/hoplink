@@ -7,6 +7,7 @@ import pytest
 from reddit_extract.storage.naming import (
     MAX_SLUG_LENGTH,
     collection_key,
+    extension_for_content_type,
     media_extension,
     media_filename,
     slugify,
@@ -136,3 +137,35 @@ def test_a_file_with_no_slug_is_named_by_its_index_alone():
 
 def test_a_collection_nests_inside_its_source():
     assert collection_key("pics", "someuploader") == "pics/someuploader"
+
+
+@pytest.mark.parametrize(
+    "content_type, expected",
+    [
+        ("image/jpeg", "jpg"),  # not mimetypes' ".jpe"
+        ("image/png", "png"),
+        ("image/webp", "webp"),
+        ("IMAGE/PNG", "png"),  # header casing is not meaningful
+        ("image/png; charset=binary", "png"),  # parameters are not part of the type
+        ("video/mp4", "mp4"),
+        ("audio/x-m4a", "m4a"),
+        ("application/pdf", "pdf"),
+    ],
+)
+def test_a_content_type_names_its_extension(content_type, expected):
+    assert extension_for_content_type(content_type) == expected
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/octet-stream",  # the generic "some bytes" answer names no format
+        "binary/octet-stream",
+        "",
+        None,
+        "   ",
+        "not/a-real-type",
+    ],
+)
+def test_a_content_type_naming_no_format_corrects_nothing(content_type):
+    assert extension_for_content_type(content_type) is None

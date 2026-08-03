@@ -14,8 +14,10 @@ import pytest
 from reddit_extract.core import context as context_module
 from reddit_extract.core.browser import FetchResult
 from reddit_extract.core.context import ExtractionContext
+from reddit_extract.core.state import SharedState
 from reddit_extract.events import Events
 from reddit_extract.models.config import ExtractorConfig
+from reddit_extract.models.media import MediaType
 from reddit_extract.models.source import Subreddit
 
 JPEG = FetchResult(ok=True, status=200, content_type="image/jpeg", body=b"bytes")
@@ -49,15 +51,32 @@ class FakePage:
 
 
 class FakeBrowser:
-    """Stands in for BrowserManager: fresh fake pages and canned fetches."""
+    """Stands in for BrowserManager: fresh fake pages and canned fetches.
 
-    def __init__(self, result: FetchResult = JPEG, page_result: Any = "<html>") -> None:
+    ``results`` scripts a sequence of outcomes, one per call, the last repeating once the script runs out --
+    enough to model a host that fails a few times and then answers.
+    """
+
+    def __init__(
+        self,
+        result: FetchResult = JPEG,
+        page_result: Any = "<html>",
+        results: List[FetchResult] | None = None,
+    ) -> None:
         self.result = result
         self.page_result = page_result
+        self._results = list(results) if results else None
         self.pages: List[FakePage] = []
         self.fetches: List[tuple[str, int | None]] = []
         self.fetch_headers: List[dict[str, str] | None] = []
+        self.downloads: List[tuple[str, int | None]] = []
+        self.download_headers: List[dict[str, str] | None] = []
         self.playwright_context = object()
+
+    def _next(self) -> FetchResult:
+        if self._results is None:
+            return self.result
+        return self._results.pop(0) if len(self._results) > 1 else self._results[0]
 
     async def new_page(self) -> FakePage:
         page = FakePage(self.page_result)
@@ -72,7 +91,17 @@ class FakeBrowser:
     ) -> FetchResult:
         self.fetches.append((url, timeout_ms))
         self.fetch_headers.append(headers)
-        return self.result
+        return self._next()
+
+    async def download(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
+        self.downloads.append((url, timeout_ms))
+        self.download_headers.append(headers)
+        return self._next()
 
 
 def build(browser: FakeBrowser | None = None, events: Events | None = None, **cfg: Any):
@@ -303,3 +332,150 @@ async def test_a_later_evaluate_opens_a_fresh_utility_page_after_aclose():
     await ctx.aclose()
     await ctx.evaluate_on("https://reddit.com/p/2", "() => 1")
     assert len(browser.pages) == 2
+
+
+def failed(status: int) -> FetchResult:
+    return FetchResult(ok=False, status=status, error="HTTP {}".format(status))
+
+
+async def test_a_successful_fetch_is_not_retried(no_sleep):
+    ctx, browser, _ = build()
+    result = await ctx.fetch("https://api.example/v1/thing")
+    assert result.ok is True
+    assert len(browser.fetches) == 1
+    assert no_sleep == []
+
+
+@pytest.mark.parametrize("status", [0, 408, 425, 429, 500, 502, 503])
+async def test_a_transient_failure_is_retried_then_succeeds(no_sleep, status):
+    browser = FakeBrowser(results=[failed(status), JPEG])
+    ctx, _, _ = build(browser)
+    result = await ctx.fetch("https://api.example/v1/thing")
+    assert result.ok is True
+    assert len(browser.fetches) == 2
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
+async def test_a_settled_answer_is_not_retried(no_sleep, status):
+    browser = FakeBrowser(results=[failed(status), JPEG])
+    ctx, _, _ = build(browser)
+    result = await ctx.fetch("https://api.example/v1/thing")
+    assert result.ok is False
+    assert len(browser.fetches) == 1
+
+
+async def test_fetch_retries_are_bounded_by_max_retries(no_sleep):
+    browser = FakeBrowser(results=[failed(429)])
+    ctx, _, _ = build(browser, max_retries=2)
+    result = await ctx.fetch("https://api.example/v1/thing")
+    assert result.ok is False
+    assert len(browser.fetches) == 3  # the first attempt plus two retries
+
+
+async def test_fetch_retries_can_be_waived_for_one_call(no_sleep):
+    browser = FakeBrowser(results=[failed(429)])
+    ctx, _, _ = build(browser, max_retries=2)
+    await ctx.fetch("https://api.example/v1/thing", retries=0)
+    assert len(browser.fetches) == 1
+
+
+async def test_fetch_backoff_grows_and_never_dips_below_the_api_pause(no_sleep):
+    browser = FakeBrowser(results=[failed(500)])
+    ctx, _, _ = build(browser, max_retries=3, retry_backoff=1.0, api_pause=2.5)
+    await ctx.fetch("https://api.example/v1/thing")
+    assert no_sleep == [2.5, 2.5, 4.0]  # 1, 2, 4
+
+
+async def test_fetch_forwards_its_headers_on_every_attempt(no_sleep):
+    browser = FakeBrowser(results=[failed(503), JPEG])
+    ctx, _, _ = build(browser)
+    await ctx.fetch("https://api.example/v1/thing", {"Authorization": "Bearer t"})
+    assert browser.fetch_headers == [
+        {"Authorization": "Bearer t"},
+        {"Authorization": "Bearer t"},
+    ]
+
+
+async def test_download_forwards_a_candidates_headers():
+    # Some CDNs answer 403 without a Referer, so the candidate has to be able to ask for one.
+    ctx, browser, _ = build()
+    await ctx.download("https://cdn.example/v.mp4", {"Referer": "https://example.com/"})
+    assert browser.download_headers == [{"Referer": "https://example.com/"}]
+
+
+async def test_download_sends_no_extra_headers_by_default():
+    ctx, browser, _ = build()
+    await ctx.download("https://cdn.example/v.mp4")
+    assert browser.download_headers == [None]
+
+
+def test_each_namespace_gets_its_own_store():
+    ctx, _, _ = build()
+    ctx.state("redgifs").data["token"] = "abc"
+    assert ctx.state("imgur").data == {}
+    assert ctx.state("redgifs").data == {"token": "abc"}
+
+
+def test_one_namespace_is_the_same_store_every_time():
+    ctx, _, _ = build()
+    assert ctx.state("redgifs") is ctx.state("redgifs")
+
+
+def test_two_contexts_over_one_store_share_it():
+    shared = SharedState()
+    browser = FakeBrowser()
+    contexts = [
+        ExtractionContext(
+            source=Subreddit("pics"),
+            config=ExtractorConfig(),
+            events=Events(),
+            browser=browser,  # type: ignore[arg-type]
+            page=FakePage(),
+            state=shared,
+        )
+        for _ in range(2)
+    ]
+    contexts[0].state("redgifs").data["seen"] = {"creator"}
+    assert contexts[1].state("redgifs").data["seen"] == {"creator"}
+
+
+def test_a_context_without_a_store_gets_a_private_one():
+    first, _, _ = build()
+    second, _, _ = build()
+    first.state("redgifs").data["token"] = "abc"
+    assert second.state("redgifs").data == {}
+
+
+def test_a_host_option_is_read_from_the_config():
+    ctx, _, _ = build(host_options={"imgur": {"client_id": "abc123"}})
+    assert ctx.host_option("imgur", "client_id") == "abc123"
+
+
+def test_an_unset_host_option_falls_back_to_the_default():
+    ctx, _, _ = build(host_options={"imgur": {"client_id": "abc123"}})
+    assert ctx.host_option("imgur", "secret", "none") == "none"
+    assert ctx.host_option("nobody", "client_id") is None
+
+
+@pytest.mark.parametrize(
+    "configured", ["Alice, BOB", ["Alice", "BOB"], ("Alice", "BOB")]
+)
+def test_a_host_list_option_normalizes_however_it_was_written(configured):
+    ctx, _, _ = build(host_options={"redgifs": {"blacklist": configured}})
+    assert ctx.host_list("redgifs", "blacklist") == ("alice", "bob")
+
+
+def test_an_unset_host_list_option_is_empty():
+    ctx, _, _ = build()
+    assert ctx.host_list("redgifs", "blacklist") == ()
+
+
+def test_scrape_all_reads_the_configured_hosts():
+    ctx, _, _ = build(scrape_all_hosts=("redgifs",))
+    assert ctx.scrape_all("redgifs") is True
+    assert ctx.scrape_all("soundgasm") is False
+
+
+def test_wanted_defaults_to_everything_when_a_job_does_not_narrow_it():
+    ctx, _, _ = build()
+    assert ctx.wanted is MediaType.ALL

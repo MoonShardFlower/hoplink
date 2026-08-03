@@ -68,7 +68,7 @@ def test_default_media_types_accept_a_list():
 
 def test_an_unknown_default_media_type_is_rejected():
     with pytest.raises(ValueError, match="unknown media type"):
-        ExtractorConfig(default_media_types="audio")
+        ExtractorConfig(default_media_types="sculpture")
 
 
 # -- validation: non-negative fields ----------------------------------------
@@ -144,32 +144,6 @@ def test_the_output_defaults_are_conservative():
     assert config.dedupe_by_hash is False  # hashing is opt-in
 
 
-def test_redgifs_scrape_all_is_off_by_default():
-    assert ExtractorConfig().redgifs_scrape_all is False
-    assert ExtractorConfig(redgifs_scrape_all=True).redgifs_scrape_all is True
-    assert ExtractorConfig().replace(redgifs_scrape_all=True).redgifs_scrape_all is True
-
-
-def test_redgifs_blacklist_is_empty_by_default():
-    assert ExtractorConfig().redgifs_blacklist == ()
-
-
-def test_redgifs_blacklist_is_normalized_from_a_comma_string():
-    # Trimmed, lower-cased, blanks dropped -- so it matches parse_username's lower-cased output.
-    config = ExtractorConfig(redgifs_blacklist=" Alice , bob ,, ")
-    assert config.redgifs_blacklist == ("alice", "bob")
-
-
-def test_redgifs_blacklist_accepts_an_iterable_and_none():
-    assert ExtractorConfig(
-        redgifs_blacklist=["Spammer", "AdBot"]
-    ).redgifs_blacklist == (
-        "spammer",
-        "adbot",
-    )
-    assert ExtractorConfig(redgifs_blacklist=None).redgifs_blacklist == ()
-
-
 def test_the_pacing_defaults_are_relaxed():
     # Reddit throttles aggressive clients, so the defaults err slow.
     config = ExtractorConfig()
@@ -215,3 +189,47 @@ def test_replace_renormalizes():
 def test_a_config_is_frozen():
     with pytest.raises(Exception):
         ExtractorConfig().headless = False  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "given", ["redgifs, Soundgasm", ["redgifs", "Soundgasm"], ("REDGIFS", "soundgasm")]
+)
+def test_scrape_all_hosts_normalizes_however_it_was_written(given):
+    assert ExtractorConfig(scrape_all_hosts=given).scrape_all_hosts == (
+        "redgifs",
+        "soundgasm",
+    )
+
+
+def test_scrape_all_hosts_defaults_to_none():
+    assert ExtractorConfig().scrape_all_hosts == ()
+
+
+def test_host_options_lower_case_their_host_names():
+    cfg = ExtractorConfig(host_options={"Imgur": {"client_id": "abc"}})
+    assert cfg.host_options["imgur"]["client_id"] == "abc"
+
+
+def test_host_options_are_read_only():
+    cfg = ExtractorConfig(host_options={"imgur": {"client_id": "abc"}})
+    with pytest.raises(TypeError):
+        cfg.host_options["imgur"]["client_id"] = "hijacked"
+    with pytest.raises(TypeError):
+        cfg.host_options["other"] = {}
+
+
+def test_a_host_entry_that_is_not_a_table_is_ignored():
+    cfg = ExtractorConfig(host_options={"imgur": "nonsense", "ok": {"k": "v"}})
+    assert "imgur" not in cfg.host_options
+    assert cfg.host_options["ok"]["k"] == "v"
+
+
+def test_host_options_survive_a_replace():
+    cfg = ExtractorConfig(host_options={"imgur": {"client_id": "abc"}}).replace(
+        delay=1.0
+    )
+    assert cfg.host_options["imgur"]["client_id"] == "abc"
+
+
+def test_no_host_options_are_invented_when_nothing_is_configured():
+    assert dict(ExtractorConfig().host_options) == {}

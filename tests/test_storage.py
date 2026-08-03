@@ -689,3 +689,55 @@ def test_a_set_that_does_not_persist_writes_nothing():
     assert manifests.main.knows_url("u1") is True  # ...but it did read
     assert storage.manifest_writes == 0
     assert storage.files == {}  # no folder was prepared either
+
+
+def keyed(url: str, key: str) -> dict:
+    return {"post_id": "p1", "media_url": url, "media_key": key}
+
+
+def test_a_records_key_is_an_identity_it_answers_to():
+    manifest = Manifest(
+        "pics", {"files": {"0001.jpg": keyed("https://x/1?sig=a", "k1")}}
+    )
+    assert manifest.knows_key("k1") is True
+
+
+def test_a_keyed_record_still_answers_to_its_url():
+    manifest = Manifest(
+        "pics", {"files": {"0001.jpg": keyed("https://x/1?sig=a", "k1")}}
+    )
+    assert manifest.knows_key("https://x/1?sig=a") is True
+
+
+def test_a_fresh_signature_on_a_keyed_file_is_not_a_new_file():
+    manifest = Manifest(
+        "pics", {"files": {"0001.jpg": keyed("https://x/1?sig=a", "k1")}}
+    )
+    assert manifest.knows_key("https://x/1?sig=b") is False
+    assert manifest.knows_key("k1") is True
+
+
+def test_records_written_before_keys_existed_still_match_on_their_url():
+    old = {
+        "files": {"0001.jpg": {"post_id": "p1", "media_url": "https://i.redd.it/a.jpg"}}
+    }
+    assert Manifest("pics", old).knows_key("https://i.redd.it/a.jpg") is True
+
+
+def test_knows_url_is_an_alias_of_knows_key():
+    manifest = Manifest("pics", {"files": {"0001.jpg": keyed("https://x/1", "k1")}})
+    assert manifest.knows_url("k1") is True
+
+
+def test_adding_a_keyed_record_registers_both_identities():
+    manifest = Manifest("pics")
+    manifest.add("0001.jpg", keyed("https://x/1?sig=a", "k1"))
+    assert manifest.known_urls() == {"https://x/1?sig=a", "k1"}
+
+
+def test_overwriting_a_keyed_record_forgets_the_identities_it_carried():
+    manifest = Manifest("pics")
+    manifest.add("0001.jpg", keyed("https://x/1?sig=a", "k1"))
+    manifest.add("0001.jpg", keyed("https://x/2?sig=b", "k2"))
+    assert manifest.knows_key("k1") is False
+    assert manifest.knows_key("k2") is True

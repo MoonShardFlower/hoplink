@@ -118,6 +118,8 @@ class FakeBrowser:
         self.fetched: List[str] = []
         self.pages: List[FakePage] = []
         self.started = 0
+        #: the headers each download was asked to send, so a candidate's own can be observed
+        self.download_headers: List[dict[str, str] | None] = []
 
     async def start(self) -> None:
         self.started += 1
@@ -135,9 +137,15 @@ class FakeBrowser:
         self.pages.append(page)
         return page
 
-    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def download(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> FetchResult:
         # The real manager may route this straight out to the network; a fake has only the one route.
-        return await self.fetch(url, timeout_ms)
+        self.download_headers.append(headers)
+        return await self.fetch(url, timeout_ms, headers)
 
     async def dismiss_gates(self, page: Any) -> None:
         pass
@@ -1346,3 +1354,211 @@ def test_no_handler_means_none():
         )
         is None
     )
+
+
+# -- handler selection: fallbacks come last ---------------------------------
+
+
+class ClaimsEverything(MediaHandler):
+    """A specific handler that claims any post and resolves one file."""
+
+    media_type = MediaType.IMAGE
+
+    def can_handle(self, post: Post) -> bool:
+        return True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        return [MediaCandidate("https://i.redd.it/specific.jpg", MediaType.IMAGE)]
+
+
+class CatchAll(ClaimsEverything):
+    """The same, but marked as the chain's catch-all."""
+
+    fallback = True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        return [MediaCandidate("https://i.redd.it/catchall.jpg", MediaType.IMAGE)]
+
+
+async def test_a_specific_handler_beats_a_catch_all_registered_before_it():
+    result, _, _ = await run(
+        [[harvested("a")]], handlers=[CatchAll(), ClaimsEverything()]
+    )
+    assert [item.url for item in result.items] == ["https://i.redd.it/specific.jpg"]
+
+
+async def test_the_catch_all_still_takes_what_nothing_else_claims():
+    class Fussy(ClaimsEverything):
+        def can_handle(self, post: Post) -> bool:
+            return False
+
+    result, _, _ = await run([[harvested("a")]], handlers=[CatchAll(), Fussy()])
+    assert [item.url for item in result.items] == ["https://i.redd.it/catchall.jpg"]
+
+
+def test_the_built_in_catch_all_is_reached_for_a_plain_image_link():
+    # A direct image on an unknown host has no specific handler, so LinkImageHandler must still see it.
+    rex, _, _ = build([[]])
+    post = Post.from_harvest(
+        {"id": "p1", "type": "link", "content_href": "https://unknown.test/a.jpg"}
+    )
+    assert rex._select_handler(post, MediaType.ALL).name == "LinkImageHandler"
+
+
+class RefererHandler(MediaHandler):
+    """A host whose CDN answers 403 without a Referer."""
+
+    media_type = MediaType.IMAGE
+
+    def can_handle(self, post: Post) -> bool:
+        return True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        return [
+            MediaCandidate(
+                "https://cdn.example/a.jpg",
+                MediaType.IMAGE,
+                headers={"Referer": "https://example.com/"},
+            )
+        ]
+
+
+async def test_a_candidates_headers_reach_the_download():
+    _, _, browser = await run([[harvested("a")]], handlers=[RefererHandler()])
+    assert browser.download_headers == [{"Referer": "https://example.com/"}]
+
+
+async def test_an_ordinary_candidate_asks_for_no_extra_headers():
+    _, _, browser = await run([[harvested("a")]])
+    assert browser.download_headers == [None]
+
+
+class TypelessHandler(MediaHandler):
+    """A host whose URL names no format, so only the response can settle one."""
+
+    media_type = MediaType.IMAGE
+
+    def __init__(self, prefixes: tuple[str, ...] = ("image/",)) -> None:
+        self._prefixes = prefixes
+
+    def can_handle(self, post: Post) -> bool:
+        return True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        return [
+            MediaCandidate(
+                "https://cdn.example/download?id=7",
+                MediaType.IMAGE,
+                content_prefixes=self._prefixes,
+            )
+        ]
+
+
+def served(content_type: str) -> FakeBrowser:
+    return FakeBrowser(
+        [[harvested("a")]],
+        results={
+            "https://cdn.example/download?id=7": FetchResult(
+                ok=True, status=200, content_type=content_type, body=b"bytes"
+            )
+        },
+    )
+
+
+async def test_a_guessed_extension_is_corrected_by_the_response():
+    result, storage, _ = await run(
+        served("image/png"), limit=1, handlers=[TypelessHandler()]
+    )
+    assert list(storage.files["pics"]) == ["0001_photo_a.png"]
+    assert result.items[0].filename == "0001_photo_a.png"
+
+
+async def test_a_response_naming_no_format_leaves_the_guess_alone():
+    result, storage, _ = await run(
+        served("application/octet-stream"),
+        limit=1,
+        handlers=[TypelessHandler(("image/", "application/octet-stream"))],
+    )
+    assert list(storage.files["pics"]) == ["0001_photo_a.jpg"]
+
+
+async def test_an_extension_the_handler_asked_for_is_not_second_guessed():
+    class NamedHandler(TypelessHandler):
+        async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+            return [
+                MediaCandidate(
+                    "https://cdn.example/download?id=7", MediaType.IMAGE, ext="jpg"
+                )
+            ]
+
+    _, storage, _ = await run(served("image/png"), limit=1, handlers=[NamedHandler()])
+    assert list(storage.files["pics"]) == ["0001_photo_a.jpg"]
+
+
+async def test_an_extension_in_the_url_is_not_second_guessed():
+    _, storage, _ = await run([[harvested("a")]], limit=1)
+    assert list(storage.files["pics"]) == ["0001_photo_a.jpg"]
+
+
+# -- remembering a file behind an unstable URL ------------------------------
+
+
+class SignedUrlHandler(MediaHandler):
+    """A host whose URLs are signed, so the same file arrives under a new URL every resolve."""
+
+    media_type = MediaType.IMAGE
+
+    def __init__(self, *, keyed: bool) -> None:
+        self.keyed = keyed
+        self.resolves = 0
+
+    def can_handle(self, post: Post) -> bool:
+        return True
+
+    async def resolve(self, post: Post, ctx: Any) -> List[MediaCandidate]:
+        self.resolves += 1
+        return [
+            MediaCandidate(
+                "https://cdn.example/f.jpg?Expires=1&Signature=s{}".format(
+                    self.resolves
+                ),
+                MediaType.IMAGE,
+                key="cdn:file-1" if self.keyed else None,
+            )
+        ]
+
+
+async def rerun_signed(*, keyed: bool):
+    """Extract the same post twice through one handler, so its URL is freshly signed the second time."""
+    storage = MemoryStorage()
+    handler = SignedUrlHandler(keyed=keyed)
+    for _ in range(2):
+        result, _, _ = await run(
+            [[harvested("a")]], limit=1, storage=storage, handlers=[handler]
+        )
+    return result, storage
+
+
+async def test_a_keyed_candidate_is_recognized_under_a_fresh_signed_url():
+    result, storage = await rerun_signed(keyed=True)
+    assert result.media_saved == 0 and result.skipped_known == 1
+    assert len(storage.files["pics"]) == 1
+
+
+async def test_without_a_key_a_signed_url_is_downloaded_again():
+    result, storage = await rerun_signed(keyed=False)
+    assert result.media_saved == 1
+    assert len(storage.files["pics"]) == 2
+
+
+async def test_a_keyed_files_manifest_records_both_its_key_and_its_url():
+    storage = MemoryStorage()
+    await run(
+        [[harvested("a")]],
+        limit=1,
+        storage=storage,
+        handlers=[SignedUrlHandler(keyed=True)],
+    )
+    entry = next(iter(storage.manifests["pics"]["files"].values()))
+    assert entry["media_key"] == "cdn:file-1"
+    assert entry["media_url"].startswith("https://cdn.example/f.jpg?Expires=")
