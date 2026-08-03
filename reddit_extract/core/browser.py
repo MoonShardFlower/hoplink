@@ -7,10 +7,11 @@ This is the only module that touches Playwright, and it imports it lazily, so th
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from ..exceptions import BrowserError
@@ -19,7 +20,7 @@ from .http import FetchResult, fetch_direct, looks_blocked
 from .timing import human_bytes
 
 # FetchResult lives with the HTTP layer, since both routes produce one, but it is re-exported here for convenience
-__all__ = ["GATE_BUTTON_NAMES", "BrowserManager", "FetchResult"]
+__all__ = ["GATE_BUTTON_NAMES", "BrowserManager", "FetchResult", "HostPacer"]
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,44 @@ GATE_BUTTON_NAMES = (
 )
 
 
+class HostPacer:
+    """Keeps successive API requests to one host a minimum interval apart."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._last: dict[str, float] = {}
+
+    def reset(self) -> None:
+        """Drop all pacing state, including its loop-bound locks (called when the browser (re)starts)."""
+        self._locks.clear()
+        self._last.clear()
+
+    async def wait(self, host: str, interval: float) -> float:
+        """
+        Sleep until ``host`` may be asked again, and record this request's start.
+
+        Args:
+            host: The host about to be requested.
+            interval: Minimum seconds between successive requests to it. Zero or less disables pacing.
+
+        Returns:
+            The seconds actually slept (0.0 when the host was already due).
+        """
+        if interval <= 0:
+            return 0.0
+        lock = self._locks.setdefault(host, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            earliest = self._last.get(host, 0.0) + interval
+            slept = 0.0
+            if now < earliest:
+                slept = earliest - now
+                await asyncio.sleep(slept)
+                now = time.monotonic()
+            self._last[host] = now
+            return slept
+
+
 class BrowserManager:
     """Owns one Chromium instance (or persistent context) for many jobs."""
 
@@ -74,6 +113,8 @@ class BrowserManager:
         self._browser_only: set[str] = set()
         #: cookie header per host, so each one costs a single query to the Playwright context
         self._cookies: dict[str, str] = {}
+        #: spaces out the API calls handlers make, per host
+        self._pacer = HostPacer()
 
     @property
     def started(self) -> bool:
@@ -132,6 +173,7 @@ class BrowserManager:
             if isinstance(exc, BrowserError):
                 raise
             raise BrowserError("could not launch Chromium: {}".format(exc)) from exc
+        self._pacer.reset()
         log.debug("browser started (profile=%s)", cfg.profile_dir)
 
     async def close(self) -> None:
@@ -160,7 +202,12 @@ class BrowserManager:
             raise BrowserError("browser is not started")
         return await self._context.new_page()
 
-    async def download(self, url: str, timeout_ms: int | None = None) -> FetchResult:
+    async def download(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> FetchResult:
         """
         GET media bytes, preferring a direct request over the browser.
 
@@ -173,6 +220,8 @@ class BrowserManager:
         Args:
             url: The media URL to fetch.
             timeout_ms: Request timeout; defaults to ``config.request_timeout_ms``.
+            headers: Extra request headers this download needs (some CDNs answer 403 without a ``Referer``).
+                Sent on whichever route is taken, layered over the User-Agent and cookies.
 
         Returns:
             The fetch outcome, whichever route produced it.
@@ -182,9 +231,11 @@ class BrowserManager:
         )
         host = urlparse(url).netloc.lower()
         if not self._config.direct_download or host in self._browser_only:
-            return await self.fetch(url, timeout)
+            return await self._fetch(url, timeout, headers)
         result = await fetch_direct(
-            url, headers=await self._direct_headers(url, host), timeout_ms=timeout
+            url,
+            headers=await self._direct_headers(url, host, headers),
+            timeout_ms=timeout,
         )
         if not looks_blocked(result):
             return result
@@ -194,15 +245,19 @@ class BrowserManager:
             host,
             result.error,
         )
-        return await self.fetch(url, timeout)
+        return await self._fetch(url, timeout, headers)
 
-    async def _direct_headers(self, url: str, host: str) -> dict[str, str]:
-        """Headers for a direct request: the configured User-Agent, plus the context's cookies for the host."""
+    async def _direct_headers(
+        self, url: str, host: str, extra: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
+        """Headers for a direct request: the configured User-Agent, the context's cookies, then ``extra`` on top."""
         headers = {"User-Agent": self._config.user_agent, "Accept": "*/*"}
         if host not in self._cookies:
             self._cookies[host] = await self.cookie_header(url)
         if self._cookies[host]:
             headers["Cookie"] = self._cookies[host]
+        if extra:
+            headers.update(extra)
         return headers
 
     async def cookie_header(self, url: str) -> str:
@@ -255,13 +310,14 @@ class BrowserManager:
         self,
         url: str,
         timeout_ms: int | None = None,
-        headers: dict[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> FetchResult:
         """
-        GET a URL through the browser context (cookies, UA, and all).
+        GET a URL through the browser context (cookies, UA, and all), no faster than the host's pace allows.
 
-        Transport errors and non-2xx responses are returned as an unsuccessful FetchResult rather than raised.
-        The response is always disposed so Playwright does not hold the body in memory.
+        This is the route for API calls, so it is where per-host politeness is enforced: successive requests to one
+        host are held ``config.api_pause`` apart, whichever handler makes them. Media bytes go through `download`,
+        which is spaced by the engine instead.
 
         Args:
             url: The URL to fetch.
@@ -274,6 +330,24 @@ class BrowserManager:
         Raises:
             BrowserError: If the browser has not been started.
         """
+        await self._pacer.wait(urlparse(url).netloc.lower(), self._config.api_pause)
+        return await self._fetch(url, timeout_ms, headers)
+
+    async def _fetch(
+        self,
+        url: str,
+        timeout_ms: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> FetchResult:
+        """
+        GET a URL through the browser context without host pacing (see `fetch`).
+
+        Transport errors and non-2xx responses are returned as an unsuccessful FetchResult rather than raised.
+        The response is always disposed so Playwright does not hold the body in memory.
+
+        Raises:
+            BrowserError: If the browser has not been started.
+        """
         if not self.started:
             raise BrowserError("browser is not started")
         timeout = (
@@ -282,7 +356,7 @@ class BrowserManager:
         # Only pass headers when given, so the common call stays get(url, timeout=...).
         kwargs: dict[str, Any] = {"timeout": timeout}
         if headers:
-            kwargs["headers"] = headers
+            kwargs["headers"] = dict(headers)
         started = time.perf_counter()
         try:
             resp = await self._context.request.get(url, **kwargs)

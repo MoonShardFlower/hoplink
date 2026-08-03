@@ -15,6 +15,7 @@ Slugs are sanitized for filesystem compatibility:
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 import unicodedata
@@ -73,6 +74,59 @@ def media_extension(url: str, ext: str | None = None, *, default: str = "jpg") -
     if not resolved:
         resolved = os.path.splitext(urlparse(url).path)[1].lower().lstrip(".")
     return resolved or default
+
+
+# Content types whose usual extension `mimetypes` either doesn't know or spells unhelpfully (it answers ".jpe" for
+# image/jpeg). Anything not listed falls through to `mimetypes`, and types that describe no format in particular
+# (application/octet-stream) deliberately resolve to nothing.
+_CONTENT_TYPE_EXTENSIONS = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "image/avif": "avif",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "application/pdf": "pdf",
+    "application/zip": "zip",
+}
+
+#: Content types that name no particular format, so they can never correct an extension.
+_UNINFORMATIVE_TYPES = frozenset(
+    {"application/octet-stream", "binary/octet-stream", ""}
+)
+
+
+def extension_for_content_type(content_type: str | None) -> str | None:
+    """
+    The extension a response's Content-Type implies, or None when it implies nothing.
+
+    Used to correct a guessed extension once the bytes arrive: some hosts (Imgur most notably) serve whatever
+    format they like regardless of the extension the URL asked for, so the response is the only honest source.
+
+    Args:
+        content_type: A Content-Type header value, with or without parameters (``"image/png; charset=..."``).
+
+    Returns:
+        A lower-case extension with no leading dot, or None when the type is missing, generic
+        (``application/octet-stream``), or names a format with no known extension.
+    """
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if ctype in _UNINFORMATIVE_TYPES:
+        return None
+    known = _CONTENT_TYPE_EXTENSIONS.get(ctype)
+    if known:
+        return known
+    guessed = mimetypes.guess_extension(ctype)
+    return guessed.lstrip(".").lower() if guessed else None
 
 
 def media_filename(

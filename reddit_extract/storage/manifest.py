@@ -57,7 +57,7 @@ class Manifest:
         self.collection = collection
         self._entries = self._records(data, "files")
         self._collections = self._records(data, "collections")
-        self._urls: set[str] = set()
+        self._keys: set[str] = set()
         self._hashes: set[str] = set()
         self._reindex()
         self._next_index = (
@@ -102,27 +102,41 @@ class Manifest:
         return iter(self._collections.items())
 
     def known_urls(self) -> set[str]:
-        """Return every media URL already recorded in the manifest."""
-        return set(self._urls)
+        """Return every identity already recorded in the manifest (see `knows_key`)."""
+        return set(self._keys)
 
     def known_hashes(self) -> set[str]:
         """Return every content hash (``sha256``) recorded in the manifest, if any."""
         return set(self._hashes)
 
+    def knows_key(self, key: str) -> bool:
+        """
+        Whether a file with this identity was already downloaded into this folder.
+
+        An identity is a candidate's ``media_key`` when it has one and its ``media_url`` otherwise.
+        Candidate with stable URLs are remembered by that URL, else they are remembered by the key its handler chose.
+        """
+        return key in self._keys
+
     def knows_url(self, url: str) -> bool:
-        """Whether ``url`` was already downloaded into this folder."""
-        return url in self._urls
+        """Whether ``url`` was already downloaded into this folder (an alias of `knows_key`)."""
+        return self.knows_key(url)
 
     def knows_hash(self, digest: str) -> bool:
         """Whether a file with this content hash was already saved into this folder."""
         return digest in self._hashes
 
+    @staticmethod
+    def _identities(entry: Mapping[str, Any]) -> list[str]:
+        """The identities one record answers to: its media URL and, when it has one, its stable key."""
+        return [entry[name] for name in ("media_url", "media_key") if entry.get(name)]
+
     def _reindex(self) -> None:
-        """Rebuild the URL and hash lookups from the records."""
-        self._urls = {
-            entry["media_url"]
+        """Rebuild the identity and hash lookups from the records."""
+        self._keys = {
+            identity
             for entry in self._entries.values()
-            if entry.get("media_url")
+            for identity in self._identities(entry)
         }
         self._hashes = {
             entry["sha256"] for entry in self._entries.values() if entry.get("sha256")
@@ -154,11 +168,10 @@ class Manifest:
         record = dict(entry)
         self._entries[filename] = record
         if overwriting:
-            # The replaced record may have been the only one carrying its URL or hash.
+            # The replaced record may have been the only one carrying its identity or hash.
             self._reindex()
         else:
-            if record.get("media_url"):
-                self._urls.add(record["media_url"])
+            self._keys.update(self._identities(record))
             if record.get("sha256"):
                 self._hashes.add(record["sha256"])
 

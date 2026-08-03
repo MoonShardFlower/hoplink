@@ -40,12 +40,15 @@ from ..storage import (
     Manifest,
     ManifestSet,
     StorageBackend,
+    extension_for_content_type,
     media_extension,
     media_filename,
     slugify,
 )
 from .browser import BrowserManager, FetchResult
 from .context import ExtractionContext
+from .http import is_transient
+from .state import SharedState
 from .timing import Timings
 
 log = logging.getLogger(__name__)
@@ -130,10 +133,6 @@ JS_NEXT_PAGE = """
 () => { const a = document.querySelector('span.next-button a'); return a ? a.href : null; }
 """
 
-#: Non-2xx statuses a retry could plausibly clear, alongside anything >= 500. Status 0 is how
-#: `BrowserManager.fetch` reports a transport error (timeout, connection reset, DNS failure).
-RETRY_STATUSES = frozenset({0, 408, 425, 429})
-
 
 class _Planned(NamedTuple):
     """
@@ -147,12 +146,15 @@ class _Planned(NamedTuple):
         filename: The name to store it under.
         item: The MediaItem describing it, completed once the bytes land.
         cand: The candidate to fetch.
+        provisional_ext: True when neither the candidate nor its URL named an extension, so ``filename`` ends in a
+            guess that the response's Content-Type is allowed to correct.
     """
 
     manifest: Manifest
     filename: str
     item: MediaItem
     cand: MediaCandidate
+    provisional_ext: bool = False
 
 
 class AsyncRedditExtractor:
@@ -198,8 +200,7 @@ class AsyncRedditExtractor:
         self._post_filter = post_filter
         self._browser = browser or BrowserManager(cfg)
         self._start_lock = asyncio.Lock()
-
-    # -- lifecycle -----------------------------------------------------------
+        self._state = SharedState()
 
     @property
     def config(self) -> ExtractorConfig:
@@ -233,6 +234,7 @@ class AsyncRedditExtractor:
     def _reset_loop_state(self) -> None:
         """Drop loop-bound primitives; called by the sync facade when it replaces its event loop."""
         self._start_lock = asyncio.Lock()
+        self._state.reset()
 
     async def close(self) -> None:
         """Close the browser and release its resources."""
@@ -529,6 +531,39 @@ class AsyncRedditExtractor:
         )
 
     @staticmethod
+    def _is_guessed_ext(cand: MediaCandidate) -> bool:
+        """
+        Whether a candidate's extension is only a default, and may be corrected once the bytes arrive.
+
+        True when neither the handler nor the URL's path named one. Candidates carrying their own body always name
+        an extension.
+        """
+        if cand.body is not None or (cand.ext or "").strip():
+            return False
+        return not ExtractionContext.extension_of(cand.url)
+
+    @staticmethod
+    def _corrected_filename(filename: str, content_type: str) -> str:
+        """
+        Re-suffix ``filename`` from a response's Content-Type, when that type names a format.
+
+        Some hosts serve whatever format they like regardless of the extension the URL asked for, so a guessed
+        suffix is only settled once the response is in hand.
+
+        Args:
+            filename: The planned name, ending in a guessed extension.
+            content_type: The response's Content-Type.
+
+        Returns:
+            The name with the corrected extension, or ``filename`` unchanged when the type names nothing useful.
+        """
+        corrected = extension_for_content_type(content_type)
+        if not corrected:
+            return filename
+        stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+        return "{}.{}".format(stem, corrected)
+
+    @staticmethod
     def _grouped(
         candidates: Sequence[MediaCandidate],
     ) -> List[tuple[str, List[MediaCandidate]]]:
@@ -541,8 +576,7 @@ class AsyncRedditExtractor:
         Returns:
             ``(collection, candidates)`` pairs. The collection is ``""`` for a post's own media, which is stored
             beside the source's other files, and a slug otherwise, which gets a folder of its own. Names are
-            slugged once here, so the folder, the file names inside it, and the manifest record all agree on one
-            spelling.
+            slugged once here. The folder, file names inside it, and the manifest record all use this same spelling.
         """
         groups: dict[str, List[MediaCandidate]] = {}
         for cand in candidates:
@@ -572,18 +606,8 @@ class AsyncRedditExtractor:
 
     @staticmethod
     def _is_transient(result: FetchResult) -> bool:
-        """
-        Whether a failed fetch is worth retrying.
-
-        Args:
-            result: The unsuccessful FetchResult to classify.
-
-        Returns:
-            True for faults that a later attempt could plausibly survive: transport errors
-            (`BrowserManager.fetch` reports those with status 0 -- a timeout, reset, or DNS failure),
-            rate limiting, and server-side errors. A 404 or 403 is the CDN's settled answer, so it is not retried.
-        """
-        return result.status in RETRY_STATUSES or result.status >= 500
+        """Whether a failed fetch is worth retrying (see `reddit_extract.core.http.is_transient`)."""
+        return is_transient(result)
 
     @staticmethod
     def _validate(
@@ -640,7 +664,7 @@ class AsyncRedditExtractor:
         wait = transfer = 0.0
         for attempt in range(1, attempts + 1):
             # media goes the direct route when it can, handlers' API calls stay on the browser where the cookies matter.
-            result = await ctx.download(cand.url)
+            result = await ctx.download(cand.url, headers=cand.headers)
             wait += result.wait
             transfer += result.transfer
             result = result._replace(wait=wait, transfer=transfer)
@@ -761,7 +785,12 @@ class AsyncRedditExtractor:
 
         page = await self._browser.new_page()
         ctx = ExtractionContext(
-            source=source, config=cfg, events=ev, browser=self._browser, page=page
+            source=source,
+            config=cfg,
+            events=ev,
+            browser=self._browser,
+            page=page,
+            state=self._state,
         )
         try:
             # Hand the flair to Reddit when both the filter and the source support it. The client-side flair
@@ -818,7 +847,7 @@ class AsyncRedditExtractor:
                 # naming identical however many downloads later run at once, and leaves the manifest, the hash
                 # de-dupe, and the event stream to the single-threaded commit pass below.
                 planned: List[_Planned] = []
-                batch_urls: set[str] = set()
+                batch_keys: set[str] = set()
                 for name, group in self._grouped(candidates):
                     collected = bool(name)
                     manifest = (
@@ -829,9 +858,10 @@ class AsyncRedditExtractor:
                     multi = not collected and len(group) > 1
                     index: int | None = None
                     for part, cand in enumerate(group, 1):
-                        # batch_urls guards the same URL appearing twice in one post: with downloads in flight
+                        # batch_keys guards the same file appearing twice in one post: with downloads in flight
                         # concurrently, the manifest can't yet know about the first one's commit.
-                        if manifest.knows_url(cand.url) or cand.url in batch_urls:
+                        key = cand.dedupe_key
+                        if manifest.knows_key(key) or key in batch_keys:
                             result.skipped_known += 1
                             continue
                         # A collection numbers each of its files; a post's own media share the post's index.
@@ -854,6 +884,7 @@ class AsyncRedditExtractor:
                             created=post.created,
                             source_key=manifest.storage_key,
                             collection=name or None,
+                            key=cand.key,
                         )
                         if dry_run:
                             result.items.append(item)
@@ -862,8 +893,12 @@ class AsyncRedditExtractor:
                         if storage.exists(manifest.storage_key, fname):
                             result.skipped_existing += 1
                             continue
-                        batch_urls.add(cand.url)
-                        planned.append(_Planned(manifest, fname, item, cand))
+                        batch_keys.add(key)
+                        planned.append(
+                            _Planned(
+                                manifest, fname, item, cand, self._is_guessed_ext(cand)
+                            )
+                        )
                     if collected:
                         # Post-level provenance, recorded whether or not this run had anything left to fetch.
                         manifests.main.add_collection(
@@ -895,16 +930,23 @@ class AsyncRedditExtractor:
                                     )
                                     continue
                                 item.sha256 = digest
+                            # The index is already allocated. Only a guessed suffix is still open
+                            filename = plan.filename
+                            if plan.provisional_ext:
+                                filename = self._corrected_filename(
+                                    filename, outcome.content_type
+                                )
+                                item.filename = filename
                             with timings.measure("write"):
                                 item.path = storage.write(
                                     plan.manifest.storage_key,
-                                    plan.filename,
+                                    filename,
                                     outcome.body,
                                 )
                             item.size = len(outcome.body)
                             item.downloaded = True
-                            # add() registers the URL and hash, so the next candidate already sees this one.
-                            plan.manifest.add(plan.filename, item.to_manifest_entry())
+                            # add() registers the identity and hash, so the next candidate already sees this one.
+                            plan.manifest.add(filename, item.to_manifest_entry())
                             manifests.touch(plan.manifest)
                             result.items.append(item)
                             result.media_saved += 1

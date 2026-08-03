@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Any, Iterable, Union
+from typing import Any, Iterable, Mapping, Union
 
 MediaTypeLike = Union["MediaType", str, Iterable[Union["MediaType", str]]]
 
@@ -23,7 +23,9 @@ class MediaType(enum.Flag):
         LINK: External link posts pointing at a direct image.
         POLL: Poll posts; saved as a Markdown document of the post's metadata.
         CROSSPOST: Posts that re-share another post; resolved to the shared media.
-        ALL: Every media type combined.
+        AUDIO: Audio tracks from an external host.
+        DOCUMENT: Documents (PDFs and the like) from an external host.
+        ALL: Every media type combined. Adding a flag above means adding it here too; a test guards the pair.
     """
 
     IMAGE = enum.auto()
@@ -33,7 +35,9 @@ class MediaType(enum.Flag):
     LINK = enum.auto()
     POLL = enum.auto()
     CROSSPOST = enum.auto()
-    ALL = IMAGE | GALLERY | VIDEO | TEXT | LINK | POLL | CROSSPOST
+    AUDIO = enum.auto()
+    DOCUMENT = enum.auto()
+    ALL = IMAGE | GALLERY | VIDEO | TEXT | LINK | POLL | CROSSPOST | AUDIO | DOCUMENT
 
     @classmethod
     def coerce(cls, value: MediaTypeLike) -> "MediaType":
@@ -107,16 +111,19 @@ class MediaCandidate:
     A downloadable media URL resolved from a post by a handler.
 
     Attributes:
-        url: The direct media URL to download. When ``body`` is set, this is not fetched; it is kept only as
-            the stable key that marks the candidate as already saved on a later run.
+        url: The direct media URL to download. When ``body`` is set, this is not fetched.
         media_type: Which MediaType this candidate belongs to.
-        ext: File extension to save under, or None to infer it from the URL.
+        ext: File extension to save under, or None to infer it: first from the URL's path, if failing from the
+            response's Content-Type once the bytes arrive.
         content_prefixes: Acceptable Content-Type prefixes; a download whose response type matches none of these is rejected.
         body: Ready-made file contents. When present, the pipeline writes these bytes instead of fetching ``url``
             (used for handler-composed files such as a text post's Markdown document).
         collection: Name of the collection this file belongs to, or None for a post's own media. Candidates
             carrying one are stored together in their own ``<source>/<collection>/`` folder with their own manifest,
             and are named after the collection rather than the post.
+        headers: Extra request headers this particular download needs. Merged over the ones the fetch route sends anyway.
+        key: A stable identity for the file, used instead of ``url`` to recognize it on a later run. Set this when
+            ``url`` is not stable: a signed CDN URL carries an expiry and a signature that change on every resolve.
     """
 
     url: str
@@ -125,6 +132,13 @@ class MediaCandidate:
     content_prefixes: tuple[str, ...] = ("image/",)
     body: bytes | None = None
     collection: str | None = None
+    headers: Mapping[str, str] | None = None
+    key: str | None = None
+
+    @property
+    def dedupe_key(self) -> str:
+        """The identity this candidate is remembered by: its ``key`` when set, else its URL."""
+        return self.key or self.url
 
 
 @dataclass
@@ -146,6 +160,8 @@ class MediaItem:
         created: ISO-8601 creation time of the post, if known.
         source_key: Storage key of the folder this file went into (the source's, or a collection's inside it).
         collection: The collection this file belongs to, or None when it sits in the source's own folder.
+        key: The stable identity the file is recognized by on a later run, when that is not its URL
+            (see `MediaCandidate.key`). None means ``url`` is the identity.
     """
 
     url: str
@@ -162,6 +178,7 @@ class MediaItem:
     created: str | None = None
     source_key: str | None = None
     collection: str | None = None
+    key: str | None = None
 
     def to_manifest_entry(self) -> dict[str, Any]:
         """
@@ -180,7 +197,8 @@ class MediaItem:
             "media_url": self.url,
             "media_type": self.media_type.label,
         }
-        # Only present when content de-duplication ran, so manifests are otherwise unchanged.
+        if self.key and self.key != self.url:
+            entry["media_key"] = self.key
         if self.sha256:
             entry["sha256"] = self.sha256
         return entry

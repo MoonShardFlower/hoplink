@@ -3,24 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlparse
 
 from ..events import Events, emit
 from ..models.config import ExtractorConfig
 from ..models.source import Source
+from .http import is_transient
+from .state import HostState, SharedState
 
 if TYPE_CHECKING:  # pragma: no cover
     from .browser import BrowserManager, FetchResult
+
+log = logging.getLogger(__name__)
 
 
 class ExtractionContext:
     """
     The interface a handler may use while resolving a post.
 
-    Handlers should stick to `evaluate_on`, `fetch`, `skip`, `sleep`, and the ``config``/``formats`` attributes.
-    ``page`` and ``browser_context`` are escape hatches for advanced handlers.
+    Handlers should stick to `evaluate_on`, `fetch`, `download`, `skip`, `sleep`, `state`, and the
+    ``config``/``formats`` attributes. ``page`` and ``browser_context`` are escape hatches for advanced handlers.
 
     Attributes:
         source: The source currently being extracted.
@@ -38,6 +43,7 @@ class ExtractionContext:
         events: Events,
         browser: "BrowserManager",
         page: Any,
+        state: SharedState | None = None,
     ) -> None:
         """Build a context for one extraction job.
 
@@ -47,6 +53,7 @@ class ExtractionContext:
             events: Progress callbacks for this job.
             browser: The shared browser manager.
             page: The listing page, already navigated to the source's URL.
+            state: The extractor's shared handler state. A fresh, job-local store is used when None.
         """
         self.source = source
         self.config = config
@@ -55,6 +62,7 @@ class ExtractionContext:
         self.page = page  #: the listing page (already navigated)
         self._browser = browser
         self._util_page: Any = None
+        self._state = state if state is not None else SharedState()
 
     @staticmethod
     def extension_of(url: str) -> str:
@@ -88,23 +96,54 @@ class ExtractionContext:
         return await page.evaluate(js, arg)
 
     async def fetch(
-        self, url: str, headers: dict[str, str] | None = None
+        self,
+        url: str,
+        headers: Mapping[str, str] | None = None,
+        *,
+        retries: int | None = None,
     ) -> "FetchResult":
         """
-        GET a URL through the browser context (cookies, UA, and all).
+        GET a URL through the browser context (cookies, UA, and all), retrying transient failures.
+
+        This is the route for a handler's API calls. Two protections: successive requests to one host are spaced
+        ``config.api_pause`` apart, and transient failures (a rate-limit, a 5xx, a dropped connection) are retried with
+        exponential backoff. Unrecoverable errors (404, 403, 401) are returned.
 
         Args:
             url: The URL to fetch.
             headers: Extra request headers (e.g. an ``Authorization`` bearer for a third-party API).
+            retries: Extra attempts after the first. Defaults to ``config.max_retries``; pass 0 for a single try.
 
         Returns:
-            The fetch outcome, including body and content type.
+            The fetch outcome of the last attempt, including body and content type.
         """
-        return await self._browser.fetch(
+        attempts = (self.config.max_retries if retries is None else max(0, retries)) + 1
+        result = await self._browser.fetch(
             url, self.config.request_timeout_ms, headers=headers
         )
+        for attempt in range(1, attempts):
+            if result.ok or not is_transient(result):
+                return result
+            delay = max(
+                self.config.api_pause, self.config.retry_backoff * (2 ** (attempt - 1))
+            )
+            log.info(
+                "attempt %d/%d for %s failed (%s); retrying in %.1fs",
+                attempt,
+                attempts,
+                url,
+                result.error,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            result = await self._browser.fetch(
+                url, self.config.request_timeout_ms, headers=headers
+            )
+        return result
 
-    async def download(self, url: str) -> "FetchResult":
+    async def download(
+        self, url: str, headers: Mapping[str, str] | None = None
+    ) -> "FetchResult":
         """
         GET media bytes by whichever route is faster and works.
 
@@ -114,11 +153,29 @@ class ExtractionContext:
 
         Args:
             url: The media URL to fetch.
+            headers: Extra request headers this file needs (a CDN that answers 403 without a ``Referer``).
 
         Returns:
             The fetch outcome, whichever route produced it.
         """
-        return await self._browser.download(url, self.config.request_timeout_ms)
+        return await self._browser.download(
+            url, self.config.request_timeout_ms, headers=headers
+        )
+
+    def state(self, namespace: str) -> HostState:
+        """
+        The shared state store for ``namespace``, for anything a handler carries between posts.
+
+        The store is shared by every job this extractor runs, concurrent ones included, so read-then-write sequences
+        belong inside ``async with store.lock``. See `reddit_extract.core.state`.
+
+        Args:
+            namespace: A key naming the state, conventionally the host it belongs to (``"redgifs"``).
+
+        Returns:
+            The namespace's HostState (its ``data`` dict and the ``lock`` guarding it).
+        """
+        return self._state.namespace(namespace)
 
     async def skip(self, url: str, reason: str) -> None:
         """

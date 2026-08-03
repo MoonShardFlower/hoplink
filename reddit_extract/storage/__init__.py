@@ -2,6 +2,7 @@ from .manifest import Manifest, ManifestSet
 from .naming import (
     MAX_SLUG_LENGTH,
     collection_key,
+    extension_for_content_type,
     media_extension,
     media_filename,
     slugify,
@@ -16,6 +17,7 @@ __all__ = [
     "Manifest",
     "ManifestSet",
     "collection_key",
+    "extension_for_content_type",
     "media_extension",
     "media_filename",
     "slugify",

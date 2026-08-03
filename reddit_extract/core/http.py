@@ -49,10 +49,28 @@ class FetchResult(NamedTuple):
 #: Statuses that mean "not through this route": worth one browser retry.
 BLOCKED_STATUSES = frozenset({0, 401, 403, 405, 406, 451})
 
+#: Non-2xx statuses a retry could plausibly clear, alongside anything >= 500. Status 0 is how a transport error
+#: (timeout, connection reset, DNS failure) is reported by both fetch routes.
+RETRY_STATUSES = frozenset({0, 408, 425, 429})
+
 
 def looks_blocked(result: FetchResult) -> bool:
     """Whether a failed direct fetch is worth retrying through the browser."""
     return not result.ok and result.status in BLOCKED_STATUSES
+
+
+def is_transient(result: FetchResult) -> bool:
+    """
+    Whether a failed fetch is worth retrying.
+
+    Args:
+        result: The unsuccessful FetchResult to classify.
+
+    Returns:
+        True for faults a later attempt could plausibly survive: transport errors, rate limiting, and server-side
+        errors. A 404 or 403 is the host's settled answer, so it is not retried.
+    """
+    return result.status in RETRY_STATUSES or result.status >= 500
 
 
 def _read(url: str, headers: Dict[str, str], timeout: float) -> FetchResult:

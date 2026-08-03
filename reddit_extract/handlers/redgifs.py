@@ -282,7 +282,11 @@ class RedGifsHandler(MediaHandler):
         return [self._candidate(u, collection=user) for u in urls]
 
     async def _page_user(self, user: str, ctx: "ExtractionContext") -> List[str]:
-        """Walk every page of a user's clips, returning their MP4 URLs (de-duplicated, in order)."""
+        """Walk every page of a user's clips, returning their MP4 URLs (de-duplicated, in order).
+
+        Pacing between pages is the fetch route's job: it holds successive requests to one host
+        ``config.api_pause`` apart whoever makes them.
+        """
         urls: List[str] = []
         seen: Set[str] = set()
         page, pages = 1, 1
@@ -302,8 +306,6 @@ class RedGifsHandler(MediaHandler):
             if not added:  # empty or all-duplicate page: stop rather than spin
                 break
             page += 1
-            if page <= pages:
-                await ctx.sleep(ctx.config.api_pause)
         return urls
 
     def _candidate(
