@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
-project = "reddit-extract"
+project = "hoplink"
 copyright = "2026, MoonShardFlower"
 author = "MoonShardFlower"
 release = "0.1.0"
@@ -34,8 +34,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # documents (which otherwise produces "duplicate object description" warnings).
 napoleon_use_ivar = True
 
-# The top-level package re-exports the public API (see reddit_extract.__all__), so a class like Events is reachable as
-# both reddit_extract.Events and reddit_extract.events.Events. That makes bare cross-references ambiguous. Silence
+# The top-level package re-exports the public API (see hoplink.__all__), so a class like Events is reachable as
+# both hoplink.Events and hoplink.events.Events. That makes bare cross-references ambiguous. Silence
 # those, rather than dropping the convenience re-exports.
 suppress_warnings = ["ref.python"]
 

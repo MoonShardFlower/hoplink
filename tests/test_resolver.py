@@ -11,15 +11,15 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.handlers.redgifs import RedGifsResolver
-from reddit_extract.handlers.resolver import (
+from hoplink.handlers.redgifs import RedGifsResolver
+from hoplink.handlers.resolver import (
     LinkResolver,
     ResolverRegistry,
     default_resolvers,
     domain_matches,
     host_of,
 )
-from reddit_extract.models.media import MediaCandidate, MediaType
+from hoplink.models.media import MediaCandidate, MediaType
 
 
 class FakeResolver(LinkResolver):

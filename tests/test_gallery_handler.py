@@ -9,16 +9,16 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from reddit_extract.core.context import ExtractionContext
-from reddit_extract.handlers.gallery import (
+from hoplink.core.context import ExtractionContext
+from hoplink.handlers.gallery import (
     JS_GALLERY,
     GalleryHandler,
     full_res_from_preview,
     gallery_image_urls,
 )
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.media import MediaType
-from reddit_extract.models.post import Post
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.media import MediaType
+from hoplink.models.post import Post
 
 FORMATS = ("jpg", "jpeg", "png", "webp")
 

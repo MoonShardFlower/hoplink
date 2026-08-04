@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from reddit_extract.storage.naming import (
+from hoplink.storage.naming import (
     MAX_SLUG_LENGTH,
     collection_key,
     extension_for_content_type,

@@ -10,15 +10,15 @@ from __future__ import annotations
 import json
 from typing import Any, List
 
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.handlers.video import (
+from hoplink.core.browser import FetchResult
+from hoplink.handlers.video import (
     VideoHandler,
     best_dash_video,
     best_mp4,
     vreddit_base,
 )
-from reddit_extract.models.media import MediaType
-from reddit_extract.models.post import Post
+from hoplink.models.media import MediaType
+from hoplink.models.post import Post
 
 BASE = "https://v.redd.it/abc123"
 

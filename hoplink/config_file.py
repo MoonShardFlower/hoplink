@@ -3,10 +3,10 @@ Load reusable CLI settings from a TOML config file.
 
 A config file lets you store a whole run -- its sources plus any command-line option -- so that::
 
-    reddit-extract --config myjob.toml
+    hoplink --config myjob.toml
 
 Replaces a long command line. The file is flat TOML whose keys mirror the long-form CLI options  (dashes or underscores
-both work). It may also set a handful of advanced  :class:`~reddit_extract.models.config.ExtractorConfig` knobs that
+both work). It may also set a handful of advanced  :class:`~hoplink.models.config.ExtractorConfig` knobs that
 have no dedicated flag (see :data:`EXTRACTOR_ONLY_KEYS`).
 
 Example ``myjob.toml``::

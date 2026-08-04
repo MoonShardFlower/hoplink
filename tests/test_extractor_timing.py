@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.models.media import MediaType
+from hoplink.core.browser import FetchResult
+from hoplink.models.media import MediaType
 from tests.test_extractor import FakeBrowser, build, run
 from tests.test_extractor_filtering import harvested
 
@@ -72,8 +72,8 @@ async def test_hashing_is_not_measured_when_de_duplication_is_off():
 
 @pytest.mark.asyncio
 async def test_a_dry_run_measures_resolution_but_never_the_download():
-    rex, _, _ = build([[harvested("a")]])
-    result = await rex.extract("r/pics", dry_run=True, media_types=MediaType.ALL)
+    hle, _, _ = build([[harvested("a")]])
+    result = await hle.extract("r/pics", dry_run=True, media_types=MediaType.ALL)
     assert "resolve" in result.timings.calls
     assert "fetch_wait" not in result.timings.calls
     assert "write" not in result.timings.calls
@@ -101,7 +101,7 @@ async def test_a_failed_download_still_reports_what_it_cost():
 
 @pytest.mark.asyncio
 async def test_the_breakdown_is_logged_when_the_run_is_verbose(caplog):
-    with caplog.at_level(logging.INFO, logger="reddit_extract.core.extractor"):
+    with caplog.at_level(logging.INFO, logger="hoplink.core.extractor"):
         await run(one_post(timed(0.25, 1.75)), limit=1)
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "where the time went" in logged
@@ -110,14 +110,14 @@ async def test_the_breakdown_is_logged_when_the_run_is_verbose(caplog):
 
 @pytest.mark.asyncio
 async def test_nothing_is_logged_below_info(caplog):
-    with caplog.at_level(logging.WARNING, logger="reddit_extract.core.extractor"):
+    with caplog.at_level(logging.WARNING, logger="hoplink.core.extractor"):
         await run(one_post(timed(0.25, 1.75)), limit=1)
     assert "where the time went" not in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_concurrent_downloads_are_flagged_in_the_log(caplog):
-    with caplog.at_level(logging.INFO, logger="reddit_extract.core.extractor"):
+    with caplog.at_level(logging.INFO, logger="hoplink.core.extractor"):
         await run(one_post(timed(0.25, 1.75)), limit=1, download_concurrency=4)
     assert "overlap" in caplog.text
 

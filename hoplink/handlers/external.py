@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Sequence, Any
+from typing import TYPE_CHECKING, List, Sequence
 
 from ..models.media import MediaCandidate
 from ..models.post import Post
@@ -57,7 +57,7 @@ class ExternalLinkHandler(MediaHandler):
         return []
 
     @staticmethod
-    def _post_urls(post: Post) -> list[str | None | Any]:
+    def _post_urls(post: Post) -> list[str]:
         """The post's outward-pointing URLs: the card's target, then any embedded player's source."""
         player_src = post.raw.get("player_src")
         return [

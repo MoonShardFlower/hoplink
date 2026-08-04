@@ -8,14 +8,14 @@ from typing import Any, Mapping
 
 import pytest
 
-from reddit_extract.storage import (
+from hoplink.storage import (
     FilesystemStorage,
     Manifest,
     ManifestSet,
     MemoryStorage,
 )
-from reddit_extract.storage import storage as storage_module
-from reddit_extract.storage.storage import MANIFEST_NAME, StorageBackend
+from hoplink.storage import storage as storage_module
+from hoplink.storage.storage import MANIFEST_NAME, StorageBackend
 
 
 def entry(url: str, **extra: Any) -> dict[str, Any]:

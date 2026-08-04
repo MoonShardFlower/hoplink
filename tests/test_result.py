@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from reddit_extract.models.media import MediaItem, MediaType
-from reddit_extract.models.post import Post
-from reddit_extract.models.result import ExtractionResult
-from reddit_extract.models.source import Subreddit
+from hoplink.models.media import MediaItem, MediaType
+from hoplink.models.post import Post
+from hoplink.models.result import ExtractionResult
+from hoplink.models.source import Subreddit
 
 START = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
 

@@ -17,15 +17,15 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.core import browser as browser_module
-from reddit_extract.core.browser import (
+from hoplink.core import browser as browser_module
+from hoplink.core.browser import (
     GATE_BUTTON_NAMES,
     BrowserManager,
     FetchResult,
     HostPacer,
 )
-from reddit_extract.exceptions import BrowserError
-from reddit_extract.models.config import ExtractorConfig
+from hoplink.exceptions import BrowserError
+from hoplink.models.config import ExtractorConfig
 
 
 class FakeResponse:
@@ -202,7 +202,7 @@ def direct(monkeypatch):
             ok=True, status=200, content_type="video/mp4", body=b"direct"
         )
 
-    monkeypatch.setattr("reddit_extract.core.browser.fetch_direct", fake_fetch_direct)
+    monkeypatch.setattr("hoplink.core.browser.fetch_direct", fake_fetch_direct)
     return recorder
 
 
@@ -240,7 +240,7 @@ async def test_start_is_idempotent(driver):
 
 
 async def test_a_profile_dir_switches_to_a_persistent_context(driver, tmp_path):
-    profile = tmp_path / "rex-profile"
+    profile = tmp_path / "hle-profile"
     mgr = BrowserManager(ExtractorConfig(profile_dir=str(profile), headless=False))
     await mgr.start()
     assert driver.chromium.persistent_dir == str(profile)
@@ -250,14 +250,14 @@ async def test_a_profile_dir_switches_to_a_persistent_context(driver, tmp_path):
 
 
 async def test_a_profile_dir_is_expanded_before_use(driver):
-    mgr = BrowserManager(ExtractorConfig(profile_dir="~/rex-test-profile"))
+    mgr = BrowserManager(ExtractorConfig(profile_dir="~/hle-test-profile"))
     try:
         await mgr.start()
     finally:
         await mgr.close()
     # Playwright has no idea what ~ means, so the tilde must never reach it.
     assert not (driver.chromium.persistent_dir or "").startswith("~")
-    os.rmdir(os.path.expanduser("~/rex-test-profile"))
+    os.rmdir(os.path.expanduser("~/hle-test-profile"))
 
 
 async def test_start_records_playwrights_timeout_type(driver):
@@ -696,9 +696,10 @@ async def test_a_missing_file_is_reported_rather_than_retried(direct):
 
 async def test_the_fallback_is_logged(direct, caplog):
     direct.result = FetchResult(ok=False, status=403, error="HTTP 403")
-    with caplog.at_level(logging.INFO, logger="reddit_extract.core.browser"):
+    with caplog.at_level(logging.INFO, logger="hoplink.core.browser"):
         await started(FakeContext(FakeRequestAPI())).download("https://x/a.mp4")
     assert "refused a direct request" in caplog.text
+
 
 @pytest.fixture
 def clock(monkeypatch):

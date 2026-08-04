@@ -1,4 +1,4 @@
-"""Entry point for ``python -m reddit_extract``."""
+"""Entry point for ``python -m hoplink``."""
 
 import sys
 

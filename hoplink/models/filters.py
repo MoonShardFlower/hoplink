@@ -8,7 +8,7 @@ The engine applies one between harvest and resolve, so a rejected post costs no 
 Example::
 
     from datetime import datetime, timezone
-    from reddit_extract import PostFilter, RedditExtractor
+    from hoplink import PostFilter, HoplinkExtractor
 
     keepers = PostFilter(
         min_score=500,
@@ -17,8 +17,8 @@ Example::
         after=datetime(2026, 1, 1, tzinfo=timezone.utc),
         skip_stickied=True,
     )
-    with RedditExtractor() as rex:
-        result = rex.extract("r/EarthPorn", post_filter=keepers)
+    with HoplinkExtractor() as hle:
+        result = hle.extract("r/EarthPorn", post_filter=keepers)
 
 Every predicate is optional; an empty filter keeps everything.
 """

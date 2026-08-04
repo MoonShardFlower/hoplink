@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from reddit_extract import cli
-from reddit_extract.config_file import EXTRACTOR_ONLY_KEYS, load_config_file
-from reddit_extract.exceptions import ConfigFileError
+from hoplink import cli
+from hoplink.config_file import EXTRACTOR_ONLY_KEYS, load_config_file
+from hoplink.exceptions import ConfigFileError
 
 
 def valid_cli_keys() -> set[str]:

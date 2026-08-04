@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from reddit_extract.core.state import SharedState
+from hoplink.core.state import SharedState
 
 
 def test_a_namespace_starts_empty():

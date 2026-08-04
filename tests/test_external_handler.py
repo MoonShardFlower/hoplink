@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from reddit_extract.handlers.external import ExternalLinkHandler
-from reddit_extract.handlers.resolver import LinkResolver
-from reddit_extract.models.media import MediaCandidate, MediaType
-from reddit_extract.models.post import Post
+from hoplink.handlers.external import ExternalLinkHandler
+from hoplink.handlers.resolver import LinkResolver
+from hoplink.models.media import MediaCandidate, MediaType
+from hoplink.models.post import Post
 
 
 class RecordingResolver(LinkResolver):

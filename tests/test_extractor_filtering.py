@@ -1,7 +1,7 @@
 """
 Tests that a PostFilter really narrows a job, driven through the engine itself.
 
-`AsyncRedditExtractor` takes a custom browser and storage backend, so the whole pipeline runs here against canned
+`AsyncHoplinkExtractor` takes a custom browser and storage backend, so the whole pipeline runs here against canned
  harvest data with no Playwright and no network.
 """
 
@@ -9,16 +9,16 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.core.extractor import JS_HARVEST, JS_IS_MODERN, AsyncRedditExtractor
-from reddit_extract.events import Events
-from reddit_extract.handlers.base import MediaHandler
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.filters import PostFilter
-from reddit_extract.models.media import MediaCandidate, MediaType
-from reddit_extract.models.post import Post
-from reddit_extract.models.source import Subreddit
-from reddit_extract.storage import MemoryStorage
+from hoplink.core.browser import FetchResult
+from hoplink.core.extractor import JS_HARVEST, JS_IS_MODERN, AsyncHoplinkExtractor
+from hoplink.events import Events
+from hoplink.handlers.base import MediaHandler
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.filters import PostFilter
+from hoplink.models.media import MediaCandidate, MediaType
+from hoplink.models.post import Post
+from hoplink.models.source import Subreddit
+from hoplink.storage import MemoryStorage
 
 JPEG = FetchResult(ok=True, status=200, content_type="image/jpeg", body=b"imagebytes")
 
@@ -144,20 +144,20 @@ def build(records, post_filter=None, handlers=None, **cfg_kwargs):
     storage = MemoryStorage()
     browser = FakeBrowser(records)
     config = ExtractorConfig(delay=0.0, scroll_pause=0.0, **cfg_kwargs)
-    rex = AsyncRedditExtractor(
+    hle = AsyncHoplinkExtractor(
         config,
         storage=storage,
         browser=browser,  # type: ignore[arg-type]
         handlers=handlers,
         post_filter=post_filter,
     )
-    return rex, storage, browser
+    return hle, storage, browser
 
 
 async def run(records, post_filter=None, handlers=None, **kwargs):
     """Extract a source whose limit matches the canned data, and return its result."""
-    rex, storage, browser = build(records, post_filter, handlers, **kwargs)
-    result = await rex.extract(
+    hle, storage, browser = build(records, post_filter, handlers, **kwargs)
+    result = await hle.extract(
         Subreddit("pics", limit=len(records)), media_types=MediaType.ALL
     )
     return result, storage, browser
@@ -199,8 +199,8 @@ async def test_filtered_post_is_absent_from_the_result():
 async def test_filter_reports_each_rejection_through_on_skip():
     skips: List[tuple[str, str]] = []
 
-    rex, _, _ = build([harvested("a", score="10")], PostFilter(min_score=500))
-    await rex.extract(
+    hle, _, _ = build([harvested("a", score="10")], PostFilter(min_score=500))
+    await hle.extract(
         Subreddit("pics", limit=1),
         media_types=MediaType.ALL,
         events=Events(on_skip=lambda src, url, reason: skips.append((url, reason))),
@@ -224,8 +224,8 @@ async def test_posts_no_handler_wants_are_not_counted_as_filtered():
     # A text post with media_types=IMAGE has no handler, so it is out of the filter's scope:
     # counting it as "filtered" would overstate what the filter did.
     records = [harvested("a", type="text", score="1"), harvested("b", score="1")]
-    rex, _, _ = build(records, PostFilter(min_score=500))
-    result = await rex.extract(Subreddit("pics", limit=2), media_types=MediaType.IMAGE)
+    hle, _, _ = build(records, PostFilter(min_score=500))
+    result = await hle.extract(Subreddit("pics", limit=2), media_types=MediaType.IMAGE)
     assert result.posts_scanned == 2
     assert result.posts_filtered == 1  # only the image post reached the filter
 
@@ -264,9 +264,9 @@ async def test_min_gallery_keeps_a_big_enough_gallery():
 
 async def test_per_call_filter_overrides_the_extractor_default():
     records = [harvested("a", score="10")]
-    rex, _, _ = build(records, PostFilter(min_score=500))
+    hle, _, _ = build(records, PostFilter(min_score=500))
     # the constructor's filter would reject this post; the per-call one accepts it
-    result = await rex.extract(
+    result = await hle.extract(
         Subreddit("pics", limit=1),
         media_types=MediaType.ALL,
         post_filter=PostFilter(min_score=1),
@@ -280,8 +280,8 @@ async def test_per_call_filter_overrides_the_extractor_default():
 
 async def test_filter_applies_during_a_dry_run():
     records = [harvested("a", score="1000"), harvested("b", score="1")]
-    rex, storage, browser = build(records, PostFilter(min_score=500))
-    result = await rex.extract(
+    hle, storage, browser = build(records, PostFilter(min_score=500))
+    result = await hle.extract(
         Subreddit("pics", limit=2), media_types=MediaType.ALL, dry_run=True
     )
     assert result.posts_filtered == 1

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from reddit_extract.models.media import MediaCandidate, MediaItem, MediaType
+from hoplink.models.media import MediaCandidate, MediaItem, MediaType
 
 # -- MediaType.coerce -------------------------------------------------------
 

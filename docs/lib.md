@@ -1,10 +1,10 @@
 # Library guide
 
-`reddit_extract` is a library first with the CLI being a thin wrapper over it. This page covers its usage.
+`hoplink` is a library first with the CLI being a thin wrapper over it. This page covers its usage.
 For the command line see [cli.md](cli.md) and for the project overview see the [README](../README.md).
 
 The full API reference is at:
-[reddit-extract.readthedocs.io](https://reddit-extract.readthedocs.io/en/latest/).
+[hoplink.readthedocs.io](https://hoplink.readthedocs.io/en/latest/).
 
 ## Contents
 
@@ -26,17 +26,17 @@ The full API reference is at:
 
 ## Two APIs
 
-`AsyncRedditExtractor` is the async-native engine and holds all behavior. `RedditExtractor` is a synchronous facade
+`AsyncHoplinkExtractor` is the async-native engine and holds all behavior. `HoplinkExtractor` is a synchronous facade
 that runs the engine on a private event-loop thread. Both take the same constructor arguments and expose the same 
 methods. Pick whichever suits your program.
 
 ### Synchronous
 
 ```python
-from reddit_extract import RedditExtractor, Subreddit, MediaType
+from hoplink import HoplinkExtractor, Subreddit, MediaType
 
-with RedditExtractor(headless=True) as rex:
-    result = rex.extract(
+with HoplinkExtractor(headless=True) as hle:
+    result = hle.extract(
         Subreddit("EarthPorn", limit=50, sort="top", time_filter="month"),
         media_types=MediaType.IMAGE | MediaType.GALLERY,
         output_dir="./downloads",
@@ -48,11 +48,11 @@ with RedditExtractor(headless=True) as rex:
 
 ```python
 import asyncio
-from reddit_extract import AsyncRedditExtractor
+from hoplink import AsyncHoplinkExtractor
 
 async def main():
-    async with AsyncRedditExtractor(headless=True) as rex:
-        result = await rex.extract("r/EarthPorn", media_types="image,gallery")
+    async with AsyncHoplinkExtractor(headless=True) as hle:
+        result = await hle.extract("r/EarthPorn", media_types="image,gallery")
         print(result.summary())
 
 asyncio.run(main())
@@ -90,7 +90,7 @@ Every method that takes a source accepts either an object or a string. strings a
 Objects let you set per-source listing options:
 
 ```python
-from reddit_extract import MultiReddit, Subreddit, UserProfile, parse_source
+from hoplink import MultiReddit, Subreddit, UserProfile, parse_source
 
 Subreddit("EarthPorn", sort="top", time_filter="month", limit=200)
 UserProfile("someuser", sort="controversial", limit=50)
@@ -111,7 +111,7 @@ Each source exposes `.url` and `.key`. The latter is the filesystem-safe name us
 `MediaType` is a combinable flag choosing *which* payloads to keep.
 
 ```python
-from reddit_extract import MediaType
+from hoplink import MediaType
 
 MediaType.IMAGE | MediaType.GALLERY     # the default
 MediaType.ALL                           # everything
@@ -133,7 +133,7 @@ name raises `ValueError`.
 downloads. Pass one, or override individual fields as keyword arguments:
 
 ```python
-from reddit_extract import ExtractorConfig, RedditExtractor
+from hoplink import ExtractorConfig, HoplinkExtractor
 
 config = ExtractorConfig(
     formats=("jpg", "png"),
@@ -145,11 +145,11 @@ config = ExtractorConfig(
     viewport=(1920, 1080),
 )
 
-with RedditExtractor(config) as rex:
+with HoplinkExtractor(config) as hle:
     ...
 
 # equivalent for a couple of fields, without building a config object
-with RedditExtractor(headless=False, output_dir="./downloads") as rex:
+with HoplinkExtractor(headless=False, output_dir="./downloads") as hle:
     ...
 ```
 
@@ -182,7 +182,7 @@ post costs no page visit and no download. A post is kept only when it satisfies 
 
 ```python
 from datetime import datetime, timezone
-from reddit_extract import PostFilter, RedditExtractor
+from hoplink import PostFilter, HoplinkExtractor
 
 keepers = PostFilter(
     min_score=1000,
@@ -198,9 +198,9 @@ keepers = PostFilter(
     skip_stickied=True,
 )
 
-with RedditExtractor(post_filter=keepers) as rex:      # default for every call
-    result = rex.extract("r/EarthPorn")
-    strict = rex.extract("r/pics", post_filter=PostFilter(min_score=5000))  # per call
+with HoplinkExtractor(post_filter=keepers) as hle:      # default for every call
+    result = hle.extract("r/EarthPorn")
+    strict = hle.extract("r/pics", post_filter=PostFilter(min_score=5000))  # per call
 
 print(result.posts_filtered, "posts rejected")
 ```
@@ -228,7 +228,7 @@ listing URL as `?f=flair_name:"..."`, so the harvester scrolls a listing that al
 and `limit` counts matching posts instead of posts scanned.
 
 ```python
-result = rex.extract(
+result = hle.extract(
     Subreddit("EarthPorn", limit=200),           # 200 *Discussion* posts,
     post_filter=PostFilter(flairs="Discussion"), # not 200 posts of which some are
 )
@@ -244,7 +244,7 @@ Reddit only accepts a single flair. When Reddit does the filtering, an empty lis
 Every extraction returns an `ExtractionResult`:
 
 ```python
-result = rex.extract("r/EarthPorn")
+result = hle.extract("r/EarthPorn")
 
 result.ok                  # False if the job errored
 result.error               # the message, when a batch records instead of raising
@@ -293,7 +293,7 @@ The library never prints on its own. Wire the `Events` callbacks to `print`, tqd
 Callbacks may be plain or async functions.
 
 ```python
-from reddit_extract import Events, RedditExtractor
+from hoplink import Events, HoplinkExtractor
 
 events = Events(
     on_job_start=lambda source: print("opening", source.url),
@@ -306,8 +306,8 @@ events = Events(
     on_job_end=lambda result: print(result.summary()),
 )
 
-with RedditExtractor(events=events) as rex:
-    rex.extract("r/EarthPorn")
+with HoplinkExtractor(events=events) as hle:
+    hle.extract("r/EarthPorn")
 ```
 
 | Callback         | Fires                                           | Arguments                                   |
@@ -336,22 +336,22 @@ internal loop thread.
 `batch` returns every result once all jobs finish, in input order. `iter_batch` yields each result as it completes.
 
 ```python
-with RedditExtractor() as rex:
-    results = rex.batch(
+with HoplinkExtractor() as hle:
+    results = hle.batch(
         ["r/EarthPorn", "r/pics", "u/someuser"],
         concurrency=2,
         media_types="image,gallery",
     )
 
-    for result in rex.iter_batch(["r/art", "r/design"], concurrency=2):
+    for result in hle.iter_batch(["r/art", "r/design"], concurrency=2):
         print(result.summary())          # arrives in completion order
 ```
 
 ```python
-async with AsyncRedditExtractor() as rex:
-    results = await rex.batch(["r/EarthPorn", "r/pics"], concurrency=2)
+async with AsyncHoplinkExtractor() as hle:
+    results = await hle.batch(["r/EarthPorn", "r/pics"], concurrency=2)
 
-    async for result in rex.iter_batch(["r/art", "r/design"]):
+    async for result in hle.iter_batch(["r/art", "r/design"]):
         print(result.summary())
 ```
 
@@ -366,14 +366,14 @@ Do not list the same source twice in one concurrent batch: the two jobs would ra
 By default files go to the filesystem under `config.output_dir`. Swap the backend to write somewhere else:
 
 ```python
-from reddit_extract import FilesystemStorage, MemoryStorage, RedditExtractor
+from hoplink import FilesystemStorage, MemoryStorage, HoplinkExtractor
 
-with RedditExtractor(storage=FilesystemStorage("./archive")) as rex:
-    rex.extract("r/EarthPorn")
+with HoplinkExtractor(storage=FilesystemStorage("./archive")) as hle:
+    hle.extract("r/EarthPorn")
 
 store = MemoryStorage()                  # nothing touches disk
-with RedditExtractor(storage=store) as rex:
-    rex.extract("r/EarthPorn")
+with HoplinkExtractor(storage=store) as hle:
+    hle.extract("r/EarthPorn")
 print(store.files.keys(), store.manifests.keys())
 ```
 
@@ -398,7 +398,7 @@ to several files carries a part number (`0007_02_Sunset_Over_Lofoten.jpg`), and 
 keeps the bare `0007.jpg`. `slugify` and `media_filename` are exported if you want to reproduce a name yourself:
 
 ```python
-from reddit_extract import media_filename, slugify
+from hoplink import media_filename, slugify
 
 slugify("Hello, World!")                        # "Hello_World"
 media_filename(7, "jpg", slug="Hello_World")    # "0007_Hello_World.jpg"
@@ -436,7 +436,7 @@ instead of carrying an entry per file:
 A handler answers two questions: *does this post belong to me?* and *which downloadable URLs does it carry?*
 
 ```python
-from reddit_extract import MediaCandidate, MediaHandler, MediaType, RedditExtractor
+from hoplink import MediaCandidate, MediaHandler, MediaType, HoplinkExtractor
 
 class StickerHandler(MediaHandler):
     media_type = MediaType.LINK
@@ -447,8 +447,8 @@ class StickerHandler(MediaHandler):
     async def resolve(self, post, ctx):
         return [MediaCandidate(post.content_href, self.media_type, ext="png")]
 
-with RedditExtractor() as rex:
-    rex.register_handler(StickerHandler())        # prepend=True by default
+with HoplinkExtractor() as hle:
+    hle.register_handler(StickerHandler())        # prepend=True by default
 ```
 
 `can_handle` should be a cheap check against already-harvested attributes, with no network access. `resolve` may use
@@ -513,7 +513,7 @@ sequence.
 Registered handlers are prepended so they take precedence over the built-ins; pass `prepend=False` to append. The
 built-in chain, in selection order, is `ImageHandler`, `GalleryHandler`, `ExternalLinkHandler`, `VideoHandler`,
 `CrosspostHandler`, `TextHandler`, `PollHandler`, `LinkImageHandler` — available individually from
-`reddit_extract.handlers`, or as a list from `default_handlers(config)`. Passing `handlers=` to the constructor
+`hoplink.handlers`, or as a list from `default_handlers(config)`. Passing `handlers=` to the constructor
 replaces the chain entirely.
 
 `ExternalLinkHandler` precedes `VideoHandler` so a RedGIFs post is resolved to its audio-bearing MP4 (via the RedGIFs 
@@ -532,8 +532,8 @@ Media on an external host is resolved by a `LinkResolver`, matched by domain rat
 reuse the resolver: link post's target, behind a crosspost, or inside the body of a text post.
 
 ```python
-from reddit_extract import (
-    AsyncRedditExtractor, ExternalLinkHandler, LinkResolver, MediaCandidate, MediaType,
+from hoplink import (
+    AsyncHoplinkExtractor, ExternalLinkHandler, LinkResolver, MediaCandidate, MediaType,
 )
 
 class ImgchestResolver(LinkResolver):
@@ -548,7 +548,7 @@ class ImgchestResolver(LinkResolver):
             return []
         return [MediaCandidate(u, self.media_type) for u in files_in(result.body)]
 
-rex = AsyncRedditExtractor(handlers=[ExternalLinkHandler([ImgchestResolver()])])
+hle = AsyncHoplinkExtractor(handlers=[ExternalLinkHandler([ImgchestResolver()])])
 ```
 
 Override `claims(url)` for a host that needs to look at the path too — claiming `/a/<id>` album URLs but not the
@@ -609,39 +609,39 @@ and run once headful to sign in. The session is reused on later runs.
 
 ```python
 # once, to log in
-with RedditExtractor(headless=False, profile_dir="./.reddit_profile") as rex:
-    rex.extract("r/somensfwsub")
+with HoplinkExtractor(headless=False, profile_dir="./.reddit_profile") as hle:
+    hle.extract("r/somensfwsub")
 
 # afterwards
-with RedditExtractor(profile_dir="./.reddit_profile") as rex:
-    rex.extract("r/somensfwsub")
+with HoplinkExtractor(profile_dir="./.reddit_profile") as hle:
+    hle.extract("r/somensfwsub")
 ```
 
 The directory is created on first use. It holds a logged-in session, so keep it secret.
 
 ## Errors
 
-All exceptions derive from `RedditExtractError`:
+All exceptions derive from `HoplinkExtractError`:
 
-| Exception            | Raised when                                                                                                  |
-|----------------------|--------------------------------------------------------------------------------------------------------------|
-| `RedditExtractError` | base class for everything below                                                                              |
-| `BrowserError`       | the browser could not be started, or has died                                                                |
-| `NoPostsFoundError`  | a listing rendered no posts: empty, private, banned, or NSFW while logged out. Carries the offending `.url`. |
-| `ConfigFileError`    | a TOML config file is missing, malformed, or names an unknown key                                            |
+| Exception             | Raised when                                                                                                  |
+|-----------------------|--------------------------------------------------------------------------------------------------------------|
+| `HoplinkExtractError` | base class for everything below                                                                              |
+| `BrowserError`        | the browser could not be started, or has died                                                                |
+| `NoPostsFoundError`   | a listing rendered no posts: empty, private, banned, or NSFW while logged out. Carries the offending `.url`. |
+| `ConfigFileError`     | a TOML config file is missing, malformed, or names an unknown key                                            |
 
 The first three are re-exported at the top level. `ConfigFileError` belongs to the CLI's config loader, so import
-it from `reddit_extract.exceptions` if you need it.
+it from `hoplink.exceptions` if you need it.
 
 ```python
-from reddit_extract import NoPostsFoundError, RedditExtractError, RedditExtractor
+from hoplink import HoplinkExtractError, HoplinkExtractor, NoPostsFoundError
 
 try:
-    with RedditExtractor() as rex:
-        rex.extract("r/somensfwsub")
+    with HoplinkExtractor() as hle:
+        hle.extract("r/somensfwsub")
 except NoPostsFoundError as exc:
     print("nothing rendered at", exc.url)
-except RedditExtractError as exc:
+except HoplinkExtractError as exc:
     print("extraction failed:", exc)
 ```
 
@@ -652,14 +652,14 @@ In a batch, a per-source failure is recorded in `result.error` instead of raisin
 
 ## Logging
 
-The library logs to the `reddit_extract` logger and attaches only a `NullHandler`, so it stays silent until you
+The library logs to the `hoplink` logger and attaches only a `NullHandler`, so it stays silent until you
 configure logging yourself:
 
 ```python
 import logging
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("reddit_extract").setLevel(logging.DEBUG)
+logging.getLogger("hoplink").setLevel(logging.DEBUG)
 ```
 
 Logs are the debugging channel (retries, per-post detail, per-fetch sizes, timings). `Events` is the progress channel.

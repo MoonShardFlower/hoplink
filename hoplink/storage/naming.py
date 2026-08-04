@@ -9,7 +9,7 @@ Files are named as `<index>_<slug>.<ext>` where:
 
 Slugs are sanitized for filesystem compatibility:
 - Characters outside letters, digits, and `-` are replaced with `_`.
-- Windows‑forbidden characters (`<>:"/\|?*` and control characters) are removed.
+- Windows‑forbidden characters (`<>:"/\\|?*` and control characters) are removed.
 - Reserved device names (CON, COM1, etc.) and trailing spaces/dots are removed.
 """
 

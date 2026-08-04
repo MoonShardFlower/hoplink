@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from reddit_extract.models.source import (
+from hoplink.models.source import (
     MultiReddit,
     Subreddit,
     UserProfile,

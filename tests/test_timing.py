@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from reddit_extract.core.timing import PHASES, Timings, human_bytes
+from hoplink.core.timing import PHASES, Timings, human_bytes
 
 
 def filled(**phases: float) -> Timings:

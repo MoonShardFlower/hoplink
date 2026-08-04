@@ -7,10 +7,10 @@ import logging
 
 import pytest
 
-from reddit_extract import cli
-from reddit_extract.config_file import EXTRACTOR_ONLY_KEYS
-from reddit_extract.models.filters import coerce_str_list
-from reddit_extract.models.media import MediaType
+from hoplink import cli
+from hoplink.config_file import EXTRACTOR_ONLY_KEYS
+from hoplink.models.filters import coerce_str_list
+from hoplink.models.media import MediaType
 from tests.test_extractor_filtering import FakeBrowser, harvested
 
 
@@ -189,11 +189,11 @@ def test_setup_logging_leaves_the_root_logger_alone(pkg_logger):
 
 def test_library_logger_has_a_null_handler():
     # Keeps the stdlib's "no handlers could be found" warning away from library users.
-    import reddit_extract
+    import hoplink
 
-    logger = logging.getLogger("reddit_extract")
+    logger = logging.getLogger("hoplink")
     assert any(isinstance(h, logging.NullHandler) for h in logger.handlers)
-    assert reddit_extract.__version__
+    assert hoplink.__version__
 
 
 # -- filters and retries come free from the config file --------------------
@@ -255,9 +255,7 @@ def fake_reddit(monkeypatch):
         harvested("c", score="5000", title="[meta] rules"),
     ]
     browser = FakeBrowser(records)
-    monkeypatch.setattr(
-        "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
-    )
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", lambda cfg: browser)
     return browser
 
 
@@ -391,7 +389,7 @@ def test_direct_download_can_be_turned_off_from_a_config_file(
         seen.append(cfg)
         return fake_reddit
 
-    monkeypatch.setattr("reddit_extract.core.extractor.BrowserManager", capture)
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", capture)
     conf = write_toml(
         tmp_path,
         'sources = ["r/pics"]\n'
@@ -414,7 +412,7 @@ def test_api_pause_reaches_the_config_from_a_config_file(
         seen.append(cfg)
         return fake_reddit
 
-    monkeypatch.setattr("reddit_extract.core.extractor.BrowserManager", capture)
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", capture)
     conf = write_toml(
         tmp_path,
         'sources = ["r/pics"]\n'

@@ -7,7 +7,7 @@ import urllib.request
 
 import pytest
 
-from reddit_extract.core.http import FetchResult, fetch_direct, looks_blocked
+from hoplink.core.http import FetchResult, fetch_direct, looks_blocked
 
 URL = "https://media.redgifs.com/Clip.mp4"
 

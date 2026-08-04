@@ -1,7 +1,7 @@
 """
 Synchronous facade over the async engine.
 
-`RedditExtractor` runs a private asyncio event loop on a daemon thread and proxies every call to `AsyncRedditExtractor`,
+`HoplinkExtractor` runs a private asyncio event loop on a daemon thread and proxies every call to `AsyncHoplinkExtractor`,
 so sync and async users get the same behavior. On Windows the loop is explicitly a ProactorEventLoop, because
 Playwright launches Chromium as a subprocess, which the selector loop can't do.
 """
@@ -23,7 +23,7 @@ from ..models.media import MediaTypeLike
 from ..models.result import ExtractionResult
 from ..storage.storage import StorageBackend
 from .browser import BrowserManager
-from .extractor import AsyncRedditExtractor, SourceLike
+from .extractor import AsyncHoplinkExtractor, SourceLike
 
 T = TypeVar("T")
 
@@ -32,18 +32,18 @@ _CLOSE_TIMEOUT = 60.0
 _CANCEL_TIMEOUT = 5.0
 
 
-class RedditExtractor:
+class HoplinkExtractor:
     """
     Browser-driven Reddit media extractor (synchronous API).
 
     The context manager owns the browser; ``extract`` and ``batch`` may be called any number of times inside it.
     Calls also auto-start the browser if you skip the ``with`` block (call `close` yourself in that case).
 
-    Constructor arguments match `AsyncRedditExtractor`.
+    Constructor arguments match `AsyncHoplinkExtractor`.
 
     Example:
-        >>> with RedditExtractor(headless=True) as rex:
-        ...     result = rex.extract(
+        >>> with HoplinkExtractor(headless=True) as hle:
+        ...     result = hle.extract(
         ...         Subreddit("EarthPorn", limit=50, sort="top", time_filter="month")
         ...     )
         ...     print(result.summary())
@@ -60,8 +60,8 @@ class RedditExtractor:
         browser: BrowserManager | None = None,
         **config_overrides: Any,
     ) -> None:
-        """Create a synchronous extractor. Arguments match `AsyncRedditExtractor`."""
-        self._async = AsyncRedditExtractor(
+        """Create a synchronous extractor. Arguments match `AsyncHoplinkExtractor`."""
+        self._async = AsyncHoplinkExtractor(
             config,
             storage=storage,
             handlers=handlers,
@@ -88,10 +88,10 @@ class RedditExtractor:
         return self._async.handlers
 
     def register_handler(self, handler: MediaHandler, *, prepend: bool = True) -> None:
-        """Add a custom handler. See `AsyncRedditExtractor.register_handler`."""
+        """Add a custom handler. See `AsyncHoplinkExtractor.register_handler`."""
         self._async.register_handler(handler, prepend=prepend)
 
-    def start(self) -> "RedditExtractor":
+    def start(self) -> "HoplinkExtractor":
         """Launch the browser (idempotent; re-usable after close())."""
         with self._lock:
             if self._loop is None:
@@ -104,7 +104,7 @@ class RedditExtractor:
                 thread = threading.Thread(
                     target=self._run_loop,
                     args=(loop,),
-                    name="reddit-extract-loop",
+                    name="hoplink-loop",
                     daemon=True,
                 )
                 thread.start()
@@ -163,7 +163,7 @@ class RedditExtractor:
             with contextlib.suppress(Exception):
                 loop.close()
 
-    def __enter__(self) -> "RedditExtractor":
+    def __enter__(self) -> "HoplinkExtractor":
         return self.start()
 
     def __exit__(self, *exc: Any) -> None:
@@ -181,7 +181,7 @@ class RedditExtractor:
         post_filter: PostFilter | None = None,
         events: Events | None = None,
     ) -> ExtractionResult:
-        """Extract one source. See `AsyncRedditExtractor.extract` for arguments."""
+        """Extract one source. See `AsyncHoplinkExtractor.extract` for arguments."""
         return self._run(
             self._async.extract(
                 source,
@@ -205,7 +205,7 @@ class RedditExtractor:
         Extract many sources, returning results in input order.
 
         Blocks until every job finishes. Failed sources get a result with ``.error`` set unless ``raise_on_error=True``.
-        Use `iter_batch` to stream results as they complete instead. See `AsyncRedditExtractor.batch`.
+        Use `iter_batch` to stream results as they complete instead. See `AsyncHoplinkExtractor.batch`.
 
         Args:
             sources: The sources (or source strings) to extract.

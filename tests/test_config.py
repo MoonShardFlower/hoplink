@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from reddit_extract.models.config import DEFAULT_FORMATS, ExtractorConfig
-from reddit_extract.models.media import MediaType
+from hoplink.models.config import DEFAULT_FORMATS, ExtractorConfig
+from hoplink.models.media import MediaType
 
 # -- formats ----------------------------------------------------------------
 

@@ -12,15 +12,15 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.core.extractor import AsyncRedditExtractor
-from reddit_extract.events import Events
-from reddit_extract.handlers.base import MediaHandler
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.media import MediaCandidate, MediaType
-from reddit_extract.models.post import Post
-from reddit_extract.models.source import Subreddit
-from reddit_extract.storage import MemoryStorage
+from hoplink.core.browser import FetchResult
+from hoplink.core.extractor import AsyncHoplinkExtractor
+from hoplink.events import Events
+from hoplink.handlers.base import MediaHandler
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.media import MediaCandidate, MediaType
+from hoplink.models.post import Post
+from hoplink.models.source import Subreddit
+from hoplink.storage import MemoryStorage
 from tests.test_extractor import FakeBrowser, run
 from tests.test_extractor_filtering import harvested
 
@@ -149,14 +149,14 @@ async def test_the_pool_runs_only_a_bounded_lookahead_ahead_of_the_writes():
     events = Events(
         on_media_saved=lambda source, item: started_when_saved.append(len(bro.fetched))
     )
-    rex = AsyncRedditExtractor(
+    hle = AsyncHoplinkExtractor(
         ExtractorConfig(delay=0.0, scroll_pause=0.0, download_concurrency=window),
         storage=MemoryStorage(),
         browser=bro,  # type: ignore[arg-type]
         handlers=[MultiHandler(URLS)],
         events=events,
     )
-    await rex.extract(Subreddit("pics", limit=1), media_types=MediaType.ALL)
+    await hle.extract(Subreddit("pics", limit=1), media_types=MediaType.ALL)
 
     assert len(started_when_saved) == len(URLS)
     for saved, started in enumerate(started_when_saved, 1):

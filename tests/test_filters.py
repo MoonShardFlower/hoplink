@@ -10,8 +10,8 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from reddit_extract.models.filters import PostFilter, coerce_datetime, coerce_str_list
-from reddit_extract.models.post import Post
+from hoplink.models.filters import PostFilter, coerce_datetime, coerce_str_list
+from hoplink.models.post import Post
 
 
 def make_post(**overrides) -> Post:

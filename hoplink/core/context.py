@@ -174,7 +174,7 @@ class ExtractionContext:
         The shared state store for ``namespace``, for anything a handler carries between posts.
 
         The store is shared by every job this extractor runs, concurrent ones included, so read-then-write sequences
-        belong inside ``async with store.lock``. See `reddit_extract.core.state`.
+        belong inside ``async with store.lock``. See `hoplink.core.state`.
 
         Args:
             namespace: A key naming the state, conventionally the host it belongs to (``"redgifs"``).

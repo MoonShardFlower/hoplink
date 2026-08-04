@@ -1,15 +1,15 @@
 """
-reddit_extract: composable, browser-driven Reddit media extraction.
+hoplink: composable, browser-driven Reddit media extraction that hops outbound links to their real host.
 
 Reddit blocks plain HTTP access to its JSON/OAuth API from most IPs, so this library drives a real browser
 (Playwright and Chromium) to render listings, then downloads the underlying media from Reddit's CDN.
 
 Quick start::
 
-    from reddit_extract import RedditExtractor, Subreddit, MediaType
+    from hoplink import HoplinkExtractor, Subreddit, MediaType
 
-    with RedditExtractor(headless=True) as rex:
-        result = rex.extract(
+    with HoplinkExtractor(headless=True) as hle:
+        result = hle.extract(
             Subreddit("EarthPorn", limit=50, sort="top", time_filter="month"),
             media_types=MediaType.IMAGE | MediaType.GALLERY,
             output_dir="./downloads",
@@ -19,15 +19,15 @@ Quick start::
 
 import logging
 
-from reddit_extract.storage.manifest import Manifest, ManifestSet
+from hoplink.storage.manifest import Manifest, ManifestSet
 
 from .core.browser import BrowserManager, FetchResult
 from .core.context import ExtractionContext
-from .core.extractor import AsyncRedditExtractor
-from .core.sync import RedditExtractor
+from .core.extractor import AsyncHoplinkExtractor
+from .core.sync import HoplinkExtractor
 from .core.timing import Timings
 from .events import Events
-from .exceptions import BrowserError, NoPostsFoundError, RedditExtractError
+from .exceptions import BrowserError, HoplinkExtractError, NoPostsFoundError
 from .handlers import (
     ExternalLinkHandler,
     GalleryHandler,
@@ -71,7 +71,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __version__ = "0.1.0"
 
 __all__ = [
-    "AsyncRedditExtractor",
+    "AsyncHoplinkExtractor",
     "BrowserError",
     "BrowserManager",
     "Events",
@@ -82,6 +82,8 @@ __all__ = [
     "FetchResult",
     "FilesystemStorage",
     "GalleryHandler",
+    "HoplinkExtractError",
+    "HoplinkExtractor",
     "ImageHandler",
     "LinkImageHandler",
     "LinkResolver",
@@ -97,8 +99,6 @@ __all__ = [
     "Post",
     "PostFilter",
     "RedGifsResolver",
-    "RedditExtractError",
-    "RedditExtractor",
     "ResolverRegistry",
     "Source",
     "StorageBackend",

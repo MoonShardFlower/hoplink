@@ -1,14 +1,15 @@
-# reddit-extract
+# hoplink
 
-[![CI/CD](https://github.com/MoonShardFlower/reddit_scraper/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/MoonShardFlower/reddit_scraper/actions/workflows/ci-cd.yml)
-[![codecov](https://codecov.io/gh/MoonShardFlower/reddit_scraper/branch/main/graph/badge.svg)](https://codecov.io/gh/MoonShardFlower/reddit_scraper)
-[![Docs](https://readthedocs.org/projects/reddit-extract/badge/?version=latest)](https://reddit-extract.readthedocs.io/en/latest/)
+[![CI/CD](https://github.com/MoonShardFlower/hoplink/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/MoonShardFlower/hoplink/actions/workflows/ci-cd.yml)
+[![codecov](https://codecov.io/gh/MoonShardFlower/hoplink/branch/main/graph/badge.svg)](https://codecov.io/gh/MoonShardFlower/hoplink)
+[![Docs](https://readthedocs.org/projects/hoplink/badge/?version=latest)](https://hoplink.readthedocs.io/en/latest/)
 [![Python](https://img.shields.io/badge/python-3.12%20|%203.13%20|%203.14-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Composable, browser-driven Reddit media extraction as a Python library with a command-line front end.
+Composable, browser-driven Reddit media extraction that hops outbound links to their real host — a Python library
+with a command-line front end.
 
-Reddit blocks plain HTTP access to its JSON and OAuth endpoints from many networks. `reddit-extract` renders listings
+Reddit blocks plain HTTP access to its JSON and OAuth endpoints from many networks. `hoplink` renders listings
 in a real browser (Playwright and Chromium), reads post data out of the rendered page, and downloads the media those 
 posts reference.
 
@@ -157,7 +158,7 @@ A 404 or an unexpected `Content-Type` is treated as final and fails on the first
 
 ## Library API
 
-`AsyncRedditExtractor` is the async-native engine and holds all behavior. `RedditExtractor` is a synchronous
+`AsyncHoplinkExtractor` is the async-native engine and holds all behavior. `HoplinkExtractor` is a synchronous
 facade over it that runs the engine on a private event-loop thread. Both take the same constructor arguments and expose
 the same methods. The CLI is a thin wrapper over the same API.
 
@@ -188,20 +189,20 @@ python -m playwright install chromium
 
 ```bash
 # Top 50 images and galleries from r/EarthPorn this month
-reddit-extract r/EarthPorn --limit 50 --sort top --time month
+hoplink r/EarthPorn --limit 50 --sort top --time month
 
 # Well-received, recent, non-pinned posts only, skipping reposts by content
-reddit-extract r/pics --min-score 1000 --after 2026-01-01 --skip-stickied --dedupe
+hoplink r/pics --min-score 1000 --after 2026-01-01 --skip-stickied --dedupe
 
 # Store a whole run in a TOML file and replay it
-reddit-extract --config myjob.toml
+hoplink --config myjob.toml
 ```
 
 ```python
-from reddit_extract import RedditExtractor, Subreddit, MediaType
+from hoplink import HoplinkExtractor, Subreddit, MediaType
 
-with RedditExtractor(headless=True) as rex:
-    result = rex.extract(
+with HoplinkExtractor(headless=True) as hle:
+    result = hle.extract(
         Subreddit("EarthPorn", limit=50, sort="top", time_filter="month"),
         media_types=MediaType.IMAGE | MediaType.GALLERY,
         output_dir="./downloads",
@@ -216,9 +217,9 @@ with RedditExtractor(headless=True) as rex:
 | [docs/cli.md](docs/cli.md)                                      | Every command-line option, the post filters, and the TOML config-file format      |
 | [docs/lib.md](docs/lib.md)                                      | The Python API: both facades, configuration, events, storage, handlers, resolvers |
 | [examples/](examples/)                                          | Ready-to-run config files                                                         |
-| [readthedocs](https://reddit-extract.readthedocs.io/en/latest/) | Generated API reference                                                           |
+| [readthedocs](https://hoplink.readthedocs.io/en/latest/) | Generated API reference                                                           |
 
-`reddit-extract --help` covers the common cases; [docs/cli.md](docs/cli.md) fills in the rest.
+`hoplink --help` covers the common cases; [docs/cli.md](docs/cli.md) fills in the rest.
 
 ## NSFW and private sources
 

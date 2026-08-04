@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from reddit_extract.core import extractor as extractor_module
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.core.extractor import AsyncRedditExtractor
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.media import MediaCandidate, MediaType
+from hoplink.core import extractor as extractor_module
+from hoplink.core.browser import FetchResult
+from hoplink.core.extractor import AsyncHoplinkExtractor
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.media import MediaCandidate, MediaType
 
 JPEG = FetchResult(ok=True, status=200, content_type="image/jpeg", body=b"bytes")
 
@@ -54,7 +54,7 @@ def candidate(**kw) -> MediaCandidate:
 
 
 async def download(ctx, cand=None) -> FetchResult:
-    return await AsyncRedditExtractor._download(ctx, cand or candidate())
+    return await AsyncHoplinkExtractor._download(ctx, cand or candidate())
 
 
 # -- the happy path --------------------------------------------------------
@@ -84,7 +84,7 @@ async def test_transient_failures_are_retried_then_succeed(no_sleep, status):
 
 async def test_transport_error_is_retried():
     # BrowserManager reports a timeout/reset as status 0 with an error string.
-    assert AsyncRedditExtractor._is_transient(
+    assert AsyncHoplinkExtractor._is_transient(
         FetchResult(ok=False, status=0, error="error: Timeout 60000ms exceeded")
     )
 
@@ -223,7 +223,7 @@ async def test_retry_is_logged_at_info(no_sleep, caplog):
         [FetchResult(ok=False, status=503, error="HTTP 503"), JPEG],
         config=ExtractorConfig(max_retries=1),
     )
-    with caplog.at_level("INFO", logger="reddit_extract.core.extractor"):
+    with caplog.at_level("INFO", logger="hoplink.core.extractor"):
         await download(ctx)
     messages = [r.getMessage() for r in caplog.records]
     assert any("retrying in 1.0s" in m and "HTTP 503" in m for m in messages)

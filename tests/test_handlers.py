@@ -10,8 +10,8 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.core.context import ExtractionContext
-from reddit_extract.handlers import (
+from hoplink.core.context import ExtractionContext
+from hoplink.handlers import (
     CrosspostHandler,
     ExternalLinkHandler,
     GalleryHandler,
@@ -23,10 +23,10 @@ from reddit_extract.handlers import (
     VideoHandler,
     default_handlers,
 )
-from reddit_extract.handlers.base import MediaHandler
-from reddit_extract.handlers.text import body_links, unwrap_redirect
-from reddit_extract.models.media import MediaCandidate, MediaType
-from reddit_extract.models.post import Post
+from hoplink.handlers.base import MediaHandler
+from hoplink.handlers.text import body_links, unwrap_redirect
+from hoplink.models.media import MediaCandidate, MediaType
+from hoplink.models.post import Post
 
 FORMATS = ("jpg", "jpeg", "png", "webp")
 

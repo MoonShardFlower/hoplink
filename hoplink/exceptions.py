@@ -1,21 +1,21 @@
-"""Exception hierarchy for reddit_extract."""
+"""Exception hierarchy for hoplink."""
 
 from __future__ import annotations
 
 
-class RedditExtractError(Exception):
-    """Base class for all reddit_extract errors."""
+class HoplinkExtractError(Exception):
+    """Base class for all hoplink errors."""
 
 
-class BrowserError(RedditExtractError):
+class BrowserError(HoplinkExtractError):
     """The underlying browser could not be started or has died."""
 
 
-class ConfigFileError(RedditExtractError):
+class ConfigFileError(HoplinkExtractError):
     """A ``--config`` TOML file is missing, malformed, or names an unknown key."""
 
 
-class NoPostsFoundError(RedditExtractError):
+class NoPostsFoundError(HoplinkExtractError):
     """
     A listing page rendered no posts.
 

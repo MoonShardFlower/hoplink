@@ -13,7 +13,7 @@ by every job of one extractor, together with the lock to guard it::
         token = store.data.get("token")
 
 Namespaces are created on first use and never removed. Their locks belong to the running event loop, so the store
-is reset whenever the loop is replaced (see `AsyncRedditExtractor._reset_loop_state`).
+is reset whenever the loop is replaced (see `AsyncHoplinkExtractor._reset_loop_state`).
 """
 
 from __future__ import annotations

@@ -11,8 +11,8 @@ Resolution uses RedGIFs' documented v2 API (https://github.com/Redgifs/api/wiki)
 2. **Lookup.** ``/v2/gifs/<id>`` (carrying that token) returns the clip's metadata, including a ``urls`` map of
    MP4s. We take ``hd`` when present, else ``sd``.
 
-This is a :class:`~reddit_extract.handlers.resolver.LinkResolver`, so it is reached through
-:class:`~reddit_extract.handlers.external.ExternalLinkHandler` for any URL on the host, wherever that URL was found:
+This is a :class:`~hoplink.handlers.resolver.LinkResolver`, so it is reached through
+:class:`~hoplink.handlers.external.ExternalLinkHandler` for any URL on the host, wherever that URL was found:
 a link post's target, a crosspost's shared media, or a link in the body of a self post. RedGIFs clips are video, so
 it declares :attr:`MediaType.VIDEO` and is passed over entirely on a run that didn't ask for video.
 
@@ -62,7 +62,7 @@ _MEDIA_RE = re.compile(
 #: MP4 renditions in descending preference.
 _QUALITY_ORDER = ("hd", "sd")
 
-#: shared-state keys (see `reddit_extract.core.state`)
+#: shared-state keys (see `hoplink.core.state`)
 _TOKEN = "token"
 _SCRAPED = "scraped_users"
 

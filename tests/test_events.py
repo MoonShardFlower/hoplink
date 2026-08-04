@@ -7,7 +7,7 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.events import Events, emit
+from hoplink.events import Events, emit
 
 # -- merged_with ------------------------------------------------------------
 

@@ -1,8 +1,8 @@
 """
 The async-native extraction engine.
 
-One `AsyncRedditExtractor` owns one browser and runs any number of jobs through it, sequentially or concurrently.
-The synchronous `RedditExtractor` facade wraps this class; all behavior lives here.
+One `AsyncHoplinkExtractor` owns one browser and runs any number of jobs through it, sequentially or concurrently.
+The synchronous `HoplinkExtractor` facade wraps this class; all behavior lives here.
 """
 
 from __future__ import annotations
@@ -157,18 +157,18 @@ class _Planned(NamedTuple):
     provisional_ext: bool = False
 
 
-class AsyncRedditExtractor:
+class AsyncHoplinkExtractor:
     """
     Async extraction engine.
 
     Use it as an async context manager so the browser is closed for you::
 
-        async with AsyncRedditExtractor() as rex:
-            result = await rex.extract("r/EarthPorn")
+        async with AsyncHoplinkExtractor() as hle:
+            result = await hle.extract("r/EarthPorn")
 
     Args:
         config: Full configuration object. Individual fields may instead be overridden with keyword arguments, e.g.
-            ``AsyncRedditExtractor(headless=False)``.
+            ``AsyncHoplinkExtractor(headless=False)``.
         storage: Where files and manifests go. Defaults to the filesystem under ``config.output_dir``.
         handlers: Replaces the default handler chain entirely.
         events: Default progress callbacks, merged with per-call events.
@@ -225,7 +225,7 @@ class AsyncRedditExtractor:
         else:
             self._handlers.append(handler)
 
-    async def start(self) -> "AsyncRedditExtractor":
+    async def start(self) -> "AsyncHoplinkExtractor":
         """Launch the browser if needed and return self (idempotent)."""
         async with self._start_lock:
             await self._browser.start()
@@ -240,7 +240,7 @@ class AsyncRedditExtractor:
         """Close the browser and release its resources."""
         await self._browser.close()
 
-    async def __aenter__(self) -> "AsyncRedditExtractor":
+    async def __aenter__(self) -> "AsyncHoplinkExtractor":
         return await self.start()
 
     async def __aexit__(self, *exc: Any) -> None:
@@ -613,7 +613,7 @@ class AsyncRedditExtractor:
 
     @staticmethod
     def _is_transient(result: FetchResult) -> bool:
-        """Whether a failed fetch is worth retrying (see `reddit_extract.core.http.is_transient`)."""
+        """Whether a failed fetch is worth retrying (see `hoplink.core.http.is_transient`)."""
         return is_transient(result)
 
     @staticmethod
@@ -676,8 +676,8 @@ class AsyncRedditExtractor:
             transfer += result.transfer
             result = result._replace(wait=wait, transfer=transfer)
             if result.ok:
-                return AsyncRedditExtractor._validate(ctx, cand, result)
-            if attempt >= attempts or not AsyncRedditExtractor._is_transient(result):
+                return AsyncHoplinkExtractor._validate(ctx, cand, result)
+            if attempt >= attempts or not AsyncHoplinkExtractor._is_transient(result):
                 return result
             # Back off exponentially, but never faster than the job's politeness delay.
             delay = max(cfg.delay, cfg.retry_backoff * (2 ** (attempt - 1)))
@@ -728,7 +728,7 @@ class AsyncRedditExtractor:
             for index in cursor:
                 await lookahead.acquire()
                 try:
-                    outcome = await AsyncRedditExtractor._download(ctx, cands[index])
+                    outcome = await AsyncHoplinkExtractor._download(ctx, cands[index])
                 except Exception as exc:
                     log.exception("downloading %s failed", cands[index].url)
                     outcome = FetchResult(

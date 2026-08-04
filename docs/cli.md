@@ -1,13 +1,13 @@
 # Command-line reference
 
-The `reddit-extract` command downloads media from Reddit by driving a real browser. This page documents every option.
+The `hoplink` command downloads media from Reddit by driving a real browser. This page documents every option.
 For the Python API see [lib.md](lib.md) and for the project overview see the [README](../README.md).
 
 ```bash
-reddit-extract [SOURCES...] [OPTIONS]
+hoplink [SOURCES...] [OPTIONS]
 ```
 
-`reddit-extract --help` prints the same options in condensed form, and `reddit-extract --version` prints the version.
+`hoplink --help` prints the same options in condensed form, and `hoplink --version` prints the version.
 
 ## Contents
 
@@ -37,10 +37,10 @@ Sources are positional arguments: pass as many as you like. Each is written to i
 Subreddit names may contain `A-Z a-z 0-9 _`; usernames may also contain `-`. Anything else is rejected.
 
 ```bash
-reddit-extract r/EarthPorn
-reddit-extract EarthPorn pics wallpapers
-reddit-extract "EarthPorn+wallpapers+skyporn"
-reddit-extract u/someuser
+hoplink r/EarthPorn
+hoplink EarthPorn pics wallpapers
+hoplink "EarthPorn+wallpapers+skyporn"
+hoplink u/someuser
 ```
 
 Sources may be omitted on the command line when a `--config` file supplies them. Giving sources on the command
@@ -55,7 +55,7 @@ line replaces the file's list entirely.
 | `--time WINDOW` | `all`   | Window for `--sort top` and `--sort controversial`: `hour`, `day`, `week`, `month`, `year`, `all`. Ignored by the other sorts.                                               |
 
 ```bash
-reddit-extract r/EarthPorn --limit 50 --sort top --time month
+hoplink r/EarthPorn --limit 50 --sort top --time month
 ```
 
 ## Choosing what to extract
@@ -87,8 +87,8 @@ A post whose type is not listed is skipped before its page is ever opened, so na
 Reddit's rehosted copy is usually silent, so the original is fetched from RedGIFs keeping the audio.
 
 ```bash
-reddit-extract r/pics --types image,gallery,video
-reddit-extract r/wallpapers --formats png,webp
+hoplink r/pics --types image,gallery,video
+hoplink r/wallpapers --formats png,webp
 ```
 
 ## External hosts
@@ -127,7 +127,7 @@ downloads/gifs/
 ```
 
 ```bash
-reddit-extract r/gifs --scrape-all redgifs --limit 200
+hoplink r/gifs --scrape-all redgifs --limit 200
 ```
 
 ### Blacklisting uploaders
@@ -137,7 +137,7 @@ is skipped before any download, which also stops `--scrape-all` from paging that
 case-insensitive. Anonymous uploads (which carry no username) are not blocked.
 
 ```bash
-reddit-extract r/gifs --scrape-all redgifs --blacklist redgifs:spammer,adbot --limit 200
+hoplink r/gifs --scrape-all redgifs --blacklist redgifs:spammer,adbot --limit 200
 ```
 
 ### Links inside text posts
@@ -150,7 +150,7 @@ Following widens what a text post can answer for, so asking for only the linked 
 posts (but drops the text you did not ask for). The run below keeps the clips a text post linked, without the Markdown:
 
 ```bash
-reddit-extract r/gifs --types video --follow-links --limit 100
+hoplink r/gifs --types video --follow-links --limit 100
 ```
 
 Reading a text post's body always costs one page visit, with or without this flag. `--follow-links` adds one resolver
@@ -184,8 +184,8 @@ JSON document with per-source totals, per-item detail (filename, path, size, has
 run-wide totals. The report is written even when some sources failed.
 
 ```bash
-reddit-extract r/pics --out ./downloads --dedupe --report run.json
-reddit-extract r/pics --dry-run              # preview without downloading
+hoplink r/pics --out ./downloads --dedupe --report run.json
+hoplink r/pics --dry-run              # preview without downloading
 ```
 
 ## Post filters
@@ -213,11 +213,11 @@ are written bare, without the `u/` prefix. `--after` must be strictly earlier th
 
 ```bash
 # original-content wallpapers from trusted posters, no mod posts
-reddit-extract r/wallpapers --title-include "^\[OC\]" --title-regex \
+hoplink r/wallpapers --title-include "^\[OC\]" --title-regex \
     --author alice,bob --title-exclude meta --min-score 500
 
 # substantial galleries only, from this year
-reddit-extract r/pics --types gallery --min-gallery 5 --after 2026-01-01
+hoplink r/pics --types gallery --min-gallery 5 --after 2026-01-01
 ```
 
 Special behaviours:
@@ -246,8 +246,8 @@ Logged-out browsing cannot see NSFW or some private content. Sign in once with a
 profile headlessly:
 
 ```bash
-reddit-extract r/somensfwsub --show --profile ./.reddit_profile   # log in once
-reddit-extract r/somensfwsub --profile ./.reddit_profile          # reuses the session
+hoplink r/somensfwsub --show --profile ./.reddit_profile   # log in once
+hoplink r/somensfwsub --profile ./.reddit_profile          # reuses the session
 ```
 
 The profile directory is created on first use. It holds a logged-in session, so keep it secret.
@@ -311,9 +311,9 @@ Two independent channels: progress goes to **stdout**, the library's diagnostics
 | `--log-level LEVEL` | `debug`, `info`, `warning`, `error`, `critical`. Overrides `--verbose`.   |
 
 ```bash
-reddit-extract r/pics -v                    # info: retries and the timing breakdown
-reddit-extract r/pics -vv                   # debug: adds per-post and per-fetch detail
-reddit-extract r/pics --log-level warning
+hoplink r/pics -v                    # info: retries and the timing breakdown
+hoplink r/pics -vv                   # debug: adds per-post and per-fetch detail
+hoplink r/pics --log-level warning
 ```
 
 ### Why a run was slow
@@ -367,7 +367,7 @@ out     = "downloads"
 ```
 
 ```bash
-reddit-extract --config earthporn.toml
+hoplink --config earthporn.toml
 ```
 
 Keys mirror the long-form options with the leading dashes removed. Dashes and underscores are interchangeable
@@ -381,7 +381,7 @@ override per run:
 
 ```bash
 # same job, but only 20 posts and download nothing this time
-reddit-extract --config earthporn.toml --limit 20 --dry-run
+hoplink --config earthporn.toml --limit 20 --dry-run
 ```
 
 The on/off switches `dry_run`, `show`, and `quiet` can be turned *on* by a config file, but the command line cannot
@@ -438,7 +438,7 @@ identically here, on the command line, and in the library.
 ### Examples
 
 Example config files live in [`examples/`](../examples/), each heavily commented and shaped around a realistic job. 
-The option tables on this page and `reddit-extract --help` are the authoritative list of accepted keys.
+The option tables on this page and `hoplink --help` are the authoritative list of accepted keys.
 
 ## Exit codes
 

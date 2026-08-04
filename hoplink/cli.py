@@ -12,9 +12,9 @@ from typing import Any, Iterable, List, Mapping
 
 from . import __version__
 from .config_file import EXTRACTOR_ONLY_KEYS, load_config_file
-from .core.sync import RedditExtractor
+from .core.sync import HoplinkExtractor
 from .events import Events
-from .exceptions import ConfigFileError, RedditExtractError
+from .exceptions import ConfigFileError, HoplinkExtractError
 from .handlers import default_resolvers
 from .models.config import DEFAULT_FORMATS, DEFAULT_UA, ExtractorConfig
 from .models.filters import PostFilter, coerce_str_list
@@ -265,7 +265,7 @@ def setup_logging(level: int | None) -> None:
     """
     Send the library's log records to stderr at ``level``.
 
-    Only the ``reddit_extract`` logger is touched, not the root one, so importing the CLI doesn't hijack logging for a
+    Only the ``hoplink`` logger is touched, not the root one, so importing the CLI doesn't hijack logging for a
     host application. stderr keeps the records out of the progress output on stdout.
 
     Args:
@@ -286,9 +286,9 @@ def setup_logging(level: int | None) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the ``reddit-extract`` argument parser."""
+    """Build the ``hoplink`` argument parser."""
     p = argparse.ArgumentParser(
-        prog="reddit-extract",
+        prog="hoplink",
         description="Download media from Reddit via a real browser (resilient against Reddit's HTTP API blocks).",
     )
     p.add_argument(
@@ -454,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Log at an explicit level; overrides --verbose.",
     )
     p.add_argument(
-        "--version", action="version", version="reddit-extract {}".format(__version__)
+        "--version", action="version", version="hoplink {}".format(__version__)
     )
     return p
 
@@ -728,10 +728,10 @@ def main(argv: List[str] | None = None) -> int:
 
     results: List[ExtractionResult] = []
     try:
-        with RedditExtractor(
+        with HoplinkExtractor(
             config, events=make_events(args.quiet), post_filter=post_filter
-        ) as rex:
-            for result in rex.iter_batch(
+        ) as hle:
+            for result in hle.iter_batch(
                 sources,
                 media_types=media_types,
                 dry_run=args.dry_run,
@@ -741,7 +741,7 @@ def main(argv: List[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         return 130
-    except RedditExtractError as exc:
+    except HoplinkExtractError as exc:
         print("error: {}".format(exc), file=sys.stderr)
         return 1
 

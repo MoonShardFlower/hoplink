@@ -13,11 +13,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from reddit_extract import cli
-from reddit_extract.exceptions import BrowserError
-from reddit_extract.models.media import MediaItem, MediaType
-from reddit_extract.models.result import ExtractionResult
-from reddit_extract.models.source import Subreddit
+from hoplink import cli
+from hoplink.exceptions import BrowserError
+from hoplink.models.media import MediaItem, MediaType
+from hoplink.models.result import ExtractionResult
+from hoplink.models.source import Subreddit
 from tests.test_extractor import FakeBrowser as ScriptedBrowser
 from tests.test_extractor_filtering import FakeBrowser, harvested
 
@@ -50,9 +50,7 @@ def item(**overrides) -> MediaItem:
 def fake_reddit(monkeypatch):
     """Make every extractor built during a run drive a FakeBrowser over canned posts."""
     browser = FakeBrowser([harvested("a"), harvested("b")])
-    monkeypatch.setattr(
-        "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
-    )
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", lambda cfg: browser)
     return browser
 
 
@@ -407,7 +405,7 @@ def test_a_browser_that_will_not_start_exits_one_with_a_clean_message(
         async def close(self):
             pass
 
-    monkeypatch.setattr("reddit_extract.core.extractor.BrowserManager", DoomedBrowser)
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", DoomedBrowser)
     assert cli.main(["r/pics", "--out", str(tmp_path)]) == 1
     assert "error: could not launch Chromium" in capsys.readouterr().err
 
@@ -427,16 +425,14 @@ def test_a_keyboard_interrupt_exits_130(monkeypatch, capsys, tmp_path):
         def iter_batch(self, *args, **kwargs):
             raise KeyboardInterrupt()
 
-    monkeypatch.setattr(cli, "RedditExtractor", InterruptedExtractor)
+    monkeypatch.setattr(cli, "HoplinkExtractor", InterruptedExtractor)
     assert cli.main(["r/pics", "--out", str(tmp_path)]) == 130
     assert "Interrupted." in capsys.readouterr().err
 
 
 def test_a_failed_source_exits_one(monkeypatch, tmp_path):
     browser = ScriptedBrowser([[harvested("a")]], fail_urls=("pics",))
-    monkeypatch.setattr(
-        "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
-    )
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", lambda cfg: browser)
     assert (
         cli.main(["r/pics", "--limit", "1", "--out", str(tmp_path), "--delay", "0"])
         == 1
@@ -529,9 +525,7 @@ def test_a_dry_run_batch_tallies_what_it_would_download(fake_reddit, tmp_path, c
 
 def test_a_batch_tally_flags_failed_sources(monkeypatch, tmp_path, capsys):
     browser = ScriptedBrowser([[harvested("a")]], fail_urls=("art",))
-    monkeypatch.setattr(
-        "reddit_extract.core.extractor.BrowserManager", lambda cfg: browser
-    )
+    monkeypatch.setattr("hoplink.core.extractor.BrowserManager", lambda cfg: browser)
     code = cli.main(
         ["r/pics", "r/art", "--limit", "1", "--out", str(tmp_path), "--delay", "0"]
     )

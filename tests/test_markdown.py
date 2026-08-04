@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from reddit_extract.handlers.markdown import post_to_markdown
-from reddit_extract.models.post import Post
+from hoplink.handlers.markdown import post_to_markdown
+from hoplink.models.post import Post
 
 
 def post(**overrides: Any) -> Post:

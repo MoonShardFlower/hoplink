@@ -11,14 +11,14 @@ from typing import Any, List
 
 import pytest
 
-from reddit_extract.core import context as context_module
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.core.context import ExtractionContext
-from reddit_extract.core.state import SharedState
-from reddit_extract.events import Events
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.media import MediaType
-from reddit_extract.models.source import Subreddit
+from hoplink.core import context as context_module
+from hoplink.core.browser import FetchResult
+from hoplink.core.context import ExtractionContext
+from hoplink.core.state import SharedState
+from hoplink.events import Events
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.media import MediaType
+from hoplink.models.source import Subreddit
 
 JPEG = FetchResult(ok=True, status=200, content_type="image/jpeg", body=b"bytes")
 

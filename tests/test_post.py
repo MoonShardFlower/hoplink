@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from reddit_extract.models.post import Post
+from hoplink.models.post import Post
 
 
 def harvest(**overrides) -> Post:

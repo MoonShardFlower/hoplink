@@ -13,9 +13,9 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Union
 
-from reddit_extract.core.browser import FetchResult
-from reddit_extract.core.state import HostState, SharedState
-from reddit_extract.handlers.redgifs import (
+from hoplink.core.browser import FetchResult
+from hoplink.core.state import HostState, SharedState
+from hoplink.handlers.redgifs import (
     AUTH_URL,
     RedGifsResolver,
     best_media_url,
@@ -26,9 +26,9 @@ from reddit_extract.handlers.redgifs import (
     redgifs_id,
     user_search_url,
 )
-from reddit_extract.models.config import ExtractorConfig
-from reddit_extract.models.filters import coerce_str_list
-from reddit_extract.models.media import MediaCandidate, MediaType
+from hoplink.models.config import ExtractorConfig
+from hoplink.models.filters import coerce_str_list
+from hoplink.models.media import MediaCandidate, MediaType
 
 GID = "gleamingwearygrouse"
 WATCH = "https://www.redgifs.com/watch/" + GID

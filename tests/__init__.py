@@ -1,1 +1,1 @@
-"""Test suite for reddit-extract."""
+"""Test suite for hoplink."""

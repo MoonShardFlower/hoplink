@@ -2,7 +2,7 @@
 Progress callbacks.
 
 The library never prints. Wire these callbacks to ``print``, tqdm, webhooks, queues... Callbacks may be plain functions
-or coroutine functions; both are supported. With the synchronous `RedditExtractor`, callbacks run on the extractor's
+or coroutine functions; both are supported. With the synchronous `HoplinkExtractor`, callbacks run on the extractor's
 internal event-loop thread.
 
 Exceptions raised by a callback are not swallowed: they abort the current job (in batches this surfaces as
