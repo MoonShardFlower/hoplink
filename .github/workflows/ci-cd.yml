@@ -1,0 +1,243 @@
+# GitHub Actions Pipeline
+# 1. Runs on pushes to main and version tags (v*.*.*)
+# 2. Runs on pull requests targeting main
+# 3. Builds, tests, lints, format-checks, and type-checks the project
+# 4. Publishes to PyPI on release tags (OIDC trusted publishing)
+# 5. Creates a GitHub Release on release tags
+
+name: CI/CD Pipeline
+
+on:
+  # Trigger on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+
+  # We test it on Windows + Linux with Python 3.12 - 3.14 (matches requires-python).
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: true   # Cancel other jobs if one fails
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ['3.12', '3.13', '3.14']
+
+    steps:
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v6.0.0
+        with:
+          fetch-depth: 0
+
+      # Install selected Python version
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      # Windows venv setup
+      - name: Setup virtual environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python --version
+          python -m venv venv
+          .\venv\Scripts\Activate.ps1
+          python.exe -m pip install --upgrade pip
+          pip install -e ".[dev]"   # Install project + dev extras
+
+      # Linux venv setup
+      - name: Setup virtual environment (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python --version
+          python -m venv venv
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # E501 is long lines. When black does not reformat them, I want my linter to accept them as well.
+      - name: Linting (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\venv\Scripts\Activate.ps1
+          flake8 . --extend-ignore=E501 --exclude=.\venv
+
+      - name: Linting (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          source venv/bin/activate
+          flake8 . --extend-ignore=E501 --exclude=./venv
+
+      # formatting check
+      - name: Format Check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\venv\Scripts\Activate.ps1
+          black --check .
+          isort --check-only --profile black .
+
+      - name: Format Check (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          source venv/bin/activate
+          black --check .
+          isort --check-only --profile black .
+
+      # tests
+      - name: Run Tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\venv\Scripts\Activate.ps1
+          python -m pytest tests/ -v --cov=hoplink --cov-report=term-missing --cov-report=xml
+
+      - name: Run Tests (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          source venv/bin/activate
+          python -m pytest tests/ -v --cov=hoplink --cov-report=term-missing --cov-report=xml
+
+      # Upload coverage to Codecov. Runs on every matrix job; Codecov merges the reports for a commit.
+      # relative_files (see pyproject.toml) lets the Windows and Linux reports line up.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  # Static type checking with mypy. Config is in [tool.mypy] in pyproject.toml.
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run mypy
+        shell: bash
+        run: python -m mypy hoplink/
+
+  # check if the current run is triggered by a version tag.
+  # If yes, extract the tag name (version number) and annotation (release message) and expose them for later jobs
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check_release.outputs.is_release }}
+      git_tag: ${{ steps.check_release.outputs.git_tag }}
+      release_notes: ${{ steps.check_release.outputs.release_notes }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Check for release
+        id: check_release
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            tag="${{ github.ref_name }}"
+            echo "Building Release $tag"
+
+            # Extract annotated tag message
+            releaseNotes=$(git tag -l --format='%(contents)' "$tag")
+
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "git_tag=$tag" >> $GITHUB_OUTPUT
+
+            # release notes could be multiline
+            {
+              echo "release_notes<<EOF_RELEASE_NOTES"
+              echo "$releaseNotes"
+              echo "EOF_RELEASE_NOTES"
+            } >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "git_tag=" >> $GITHUB_OUTPUT
+            echo "release_notes=" >> $GITHUB_OUTPUT
+          fi
+
+  # When we want to release, build wheel + sdist and upload to PyPI.
+  publish-pypi:
+    needs: [build-and-test, type-check, check-release]
+    if: needs.check-release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build package
+        run: python -m build
+
+      # Uploads everything in dist/ using OIDC trusted publishing
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # When we want to release, create a GitHub Release from the annotated tag.
+  publish-release:
+    needs: [build-and-test, type-check, check-release]
+    if: needs.check-release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Required to create the GitHub Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.0
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-release.outputs.git_tag }}
+          name: ${{ needs.check-release.outputs.git_tag }}
+          body: ${{ needs.check-release.outputs.release_notes }}
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
