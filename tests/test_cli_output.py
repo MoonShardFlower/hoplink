@@ -336,7 +336,10 @@ def test_a_csv_report_has_no_blank_lines_between_rows(tmp_path):
     # csv.writer emits \r\n itself; without newline="" the file would double-space on Windows.
     path = tmp_path / "report.csv"
     cli.write_report(str(path), [result(), result()])
-    assert "\n\n" not in path.read_text(encoding="utf-8", newline="")
+    # Read bytes rather than read_text(newline=""), which needs 3.13
+    raw = path.read_bytes().decode("utf-8")
+    assert "\r\r\n" not in raw  # text-mode translation of csv's own \r\n
+    assert "\n\n" not in raw
 
 
 # -- main(): usage errors exit 2 --------------------------------------------
