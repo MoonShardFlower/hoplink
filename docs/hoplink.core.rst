@@ -28,6 +28,14 @@ hoplink.core.extractor module
    :show-inheritance:
    :undoc-members:
 
+hoplink.core.login module
+-------------------------
+
+.. automodule:: hoplink.core.login
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 hoplink.core.sync module
 ------------------------
 

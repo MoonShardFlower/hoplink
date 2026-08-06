@@ -24,6 +24,7 @@ from hoplink.storage.manifest import Manifest, ManifestSet
 from .core.browser import BrowserManager, FetchResult
 from .core.context import ExtractionContext
 from .core.extractor import AsyncHoplinkExtractor
+from .core.login import LoginResult, LoginState, async_login, login, login_state
 from .core.sync import HoplinkExtractor
 from .core.timing import Timings
 from .events import Events
@@ -87,6 +88,8 @@ __all__ = [
     "ImageHandler",
     "LinkImageHandler",
     "LinkResolver",
+    "LoginResult",
+    "LoginState",
     "Manifest",
     "ManifestSet",
     "MediaCandidate",
@@ -107,8 +110,11 @@ __all__ = [
     "Timings",
     "UserProfile",
     "VideoHandler",
+    "async_login",
     "default_handlers",
     "default_resolvers",
+    "login",
+    "login_state",
     "media_filename",
     "parse_source",
     "slugify",

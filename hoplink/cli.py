@@ -12,6 +12,7 @@ from typing import Any, Iterable, List, Mapping
 
 from . import __version__
 from .config_file import EXTRACTOR_ONLY_KEYS, load_config_file
+from .core.login import login
 from .core.sync import HoplinkExtractor
 from .events import Events
 from .exceptions import ConfigFileError, HoplinkExtractError
@@ -436,6 +437,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Persistent browser profile dir (stay logged in).",
     )
+    p.add_argument(
+        "--login",
+        action="store_true",
+        help="Sign in to Reddit and exit: opens a browser window, waits for the sign-in, and stores the session "
+        "in --profile.",
+    )
     p.add_argument("--user-agent", default=DEFAULT_UA, help="Custom User-Agent.")
     p.add_argument(
         "-q", "--quiet", action="store_true", help="Only print per-source summaries."
@@ -651,6 +658,63 @@ def _write_report_csv(path: str, results: List[ExtractionResult]) -> None:
             )
 
 
+def run_login(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    overrides: Mapping[str, Any],
+) -> int:
+    """
+    Serve ``--login``: sign in to Reddit interactively, then stop. No source is opened and nothing is downloaded.
+
+    Args:
+        args: The parsed namespace.
+        parser: The parser, used to exit with a usage message when no profile was given.
+        overrides: Advanced ``ExtractorConfig`` values from a config file, forwarded to the browser.
+
+    Returns:
+        A process exit code: 0 when the profile ends up signed in, 1 when it does not, 130 on keyboard interrupt.
+    """
+    if not args.profile:
+        parser.error(
+            "--login needs --profile DIR: without a persistent profile there is nowhere to keep the session"
+        )
+    if args.sources:
+        print(
+            "note: --login ignores the sources given; nothing is scraped.",
+            file=sys.stderr,
+        )
+    try:
+        config = ExtractorConfig(
+            profile_dir=args.profile,
+            user_agent=args.user_agent,
+            headless=False,
+            **overrides,
+        )
+        result = login(config, on_status=print)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+    except (HoplinkExtractError, ValueError) as exc:
+        print("error: {}".format(exc), file=sys.stderr)
+        return 1
+
+    if not result.ok:
+        print("Not signed in: {}.".format(result.reason), file=sys.stderr)
+        return 1
+    print(
+        "{} {}. Session stored in {}".format(
+            "Already signed in" if result.already_logged_in else "Signed in",
+            (
+                "as u/{}".format(result.username)
+                if result.username
+                else "(account name unavailable)"
+            ),
+            args.profile,
+        )
+    )
+    return 0
+
+
 def main(argv: List[str] | None = None) -> int:
     """
     Run the command-line interface.
@@ -665,6 +729,10 @@ def main(argv: List[str] | None = None) -> int:
     extractor_overrides = _load_cli_config(parser, argv)
     args = parser.parse_args(argv)
     setup_logging(resolve_log_level(args.log_level, args.verbose))
+
+    # A login is its own errand: it needs no source, no media type, and no output directory.
+    if args.login:
+        return run_login(args, parser, extractor_overrides)
 
     if not args.sources:
         parser.error(

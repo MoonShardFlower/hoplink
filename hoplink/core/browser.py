@@ -260,6 +260,24 @@ class BrowserManager:
             headers.update(extra)
         return headers
 
+    async def cookies(self, url: str) -> list[dict[str, Any]]:
+        """
+        The context's cookies for ``url``, as Playwright's raw records.
+
+        Args:
+            url: The URL whose cookies are wanted.
+
+        Returns:
+            One mapping per cookie (``name``, ``value``, ``domain``, ...), or an empty list if the browser is not
+            started or Playwright refuses the query.
+        """
+        if not self.started:
+            return []
+        try:
+            return list(await self._context.cookies(url))
+        except Exception:  # pragma: no cover
+            return []
+
     async def cookie_header(self, url: str) -> str:
         """
         The context's cookies for ``url``, as a ready-to-send ``Cookie`` header value.
@@ -273,12 +291,7 @@ class BrowserManager:
             ``"name=value; other=value"``,
             or "" if the browser is not started, the context has no cookies for the URL, or Playwright refuses the query
         """
-        if not self.started:
-            return ""
-        try:
-            cookies = await self._context.cookies(url)
-        except Exception:  # pragma: no cover (Playwright-side failure)
-            return ""
+        cookies = await self.cookies(url)
         return "; ".join(
             "{}={}".format(c["name"], c["value"])
             for c in cookies
