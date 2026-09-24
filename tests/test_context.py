@@ -365,7 +365,7 @@ async def test_a_settled_answer_is_not_retried(no_sleep, status):
 
 
 async def test_fetch_retries_are_bounded_by_max_retries(no_sleep):
-    browser = FakeBrowser(results=[failed(429)])
+    browser = FakeBrowser(results=[failed(503)])
     ctx, _, _ = build(browser, max_retries=2)
     result = await ctx.fetch("https://api.example/v1/thing")
     assert result.ok is False
@@ -384,6 +384,40 @@ async def test_fetch_backoff_grows_and_never_dips_below_the_api_pause(no_sleep):
     ctx, _, _ = build(browser, max_retries=3, retry_backoff=1.0, api_pause=2.5)
     await ctx.fetch("https://api.example/v1/thing")
     assert no_sleep == [2.5, 2.5, 4.0]  # 1, 2, 4
+
+
+# -- a rate limit is waited out by the fetch route, not here ----------------
+
+
+async def test_a_rate_limit_is_retried_without_a_backoff_of_its_own(no_sleep):
+    # The fetch route holds the host for its cooldown (HostPacer); a wait here would only stack on top of it.
+    browser = FakeBrowser(results=[failed(429)])
+    ctx, _, _ = build(browser, max_retries=2, retry_backoff=1.0)
+    await ctx.fetch("https://api.example/v1/thing")
+    assert no_sleep == []
+
+
+async def test_a_rate_limit_draws_on_its_own_retry_budget(no_sleep):
+    browser = FakeBrowser(results=[failed(429)])
+    ctx, _, _ = build(browser, max_retries=2, rate_limit_retries=4)
+    await ctx.fetch("https://api.example/v1/thing")
+    assert (
+        len(browser.fetches) == 5
+    )  # the first attempt plus four, not max_retries' two
+
+
+async def test_a_rate_limit_budget_is_never_smaller_than_max_retries(no_sleep):
+    browser = FakeBrowser(results=[failed(429)])
+    ctx, _, _ = build(browser, max_retries=6, rate_limit_retries=1)
+    await ctx.fetch("https://api.example/v1/thing")
+    assert len(browser.fetches) == 7
+
+
+async def test_a_rate_limit_that_clears_stops_the_retries(no_sleep):
+    browser = FakeBrowser(results=[failed(429), JPEG])
+    ctx, _, _ = build(browser, rate_limit_retries=4)
+    assert (await ctx.fetch("https://api.example/v1/thing")).ok is True
+    assert len(browser.fetches) == 2
 
 
 async def test_fetch_forwards_its_headers_on_every_attempt(no_sleep):

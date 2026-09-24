@@ -11,12 +11,19 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from ..exceptions import BrowserError
 from ..models.config import ExtractorConfig
-from .http import FetchResult, fetch_direct, looks_blocked
+from .http import (
+    FetchResult,
+    fetch_direct,
+    is_rate_limited,
+    looks_blocked,
+    parse_retry_after,
+)
 from .timing import human_bytes
 
 # FetchResult lives with the HTTP layer, since both routes produce one, but it is re-exported here for convenience
@@ -55,17 +62,78 @@ GATE_BUTTON_NAMES = (
 )
 
 
+@dataclass
+class _HostPace:
+    """What `HostPacer` knows about one host."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: monotonic start of the latest request
+    last: float = float("-inf")
+    #: monotonic time before which the host must not be asked at all, after a 429
+    until: float = float("-inf")
+    #: consecutive 429s, the exponent of the cooldown
+    strikes: int = 0
+
+
 class HostPacer:
-    """Keeps successive API requests to one host a minimum interval apart."""
+    """
+    Per-host request spacing, and the one place a host's 429 is waited out.
+
+    Because the cooldown a refusal earns (`penalize`) lives here rather than in a retry loop, it holds every request
+    aimed at that host: the retry of the refused call, whatever else is queued behind it, and other jobs' calls.
+    """
 
     def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._last: dict[str, float] = {}
+        self._hosts: dict[str, _HostPace] = {}
 
     def reset(self) -> None:
         """Drop all pacing state, including its loop-bound locks (called when the browser (re)starts)."""
-        self._locks.clear()
-        self._last.clear()
+        self._hosts.clear()
+
+    def _pace(self, host: str) -> _HostPace:
+        pace = self._hosts.get(host)
+        if pace is None:
+            pace = self._hosts[host] = _HostPace()
+        return pace
+
+    def penalize(
+        self,
+        host: str,
+        *,
+        base: float,
+        cap: float,
+        retry_after: float | None = None,
+    ) -> float | None:
+        """
+        Record that ``host`` answered 429, and hold it until it has had its pause.
+
+        The cooldown doubles with each consecutive refusal, and a longer ``Retry-After`` wins. A refusal arriving
+        while a cooldown is already running came from a request that was in flight when it began: that is the same
+        offense, not a further one, so it changes nothing.
+
+        Args:
+            host: The host that answered 429.
+            base: Seconds to leave it alone after a first refusal (``config.rate_limit_backoff``).
+            cap: Ceiling for that wait (``config.rate_limit_max_backoff``).
+            retry_after: Seconds the response's ``Retry-After`` named.
+
+        Returns:
+            The cooldown this refusal started, or None when one was already running.
+        """
+        pace = self._pace(host)
+        now = time.monotonic()
+        if now < pace.until:
+            return None
+        pace.strikes += 1
+        cooldown = min(cap, max(base * 2.0 ** (pace.strikes - 1), retry_after or 0.0))
+        pace.until = now + cooldown
+        return cooldown
+
+    def succeeded(self, host: str) -> None:
+        """Record that ``host`` answered, so its next refusal starts the cooldown over at ``base``."""
+        pace = self._hosts.get(host)
+        if pace is not None:
+            pace.strikes = 0
 
     async def wait(self, host: str, interval: float) -> float:
         """
@@ -73,23 +141,20 @@ class HostPacer:
 
         Args:
             host: The host about to be requested.
-            interval: Minimum seconds between successive requests to it. Zero or less disables pacing.
+            interval: Minimum seconds between successive requests to it. Zero or less disables spacing, though not
+                a cooldown `penalize` imposed.
 
         Returns:
             The seconds actually slept (0.0 when the host was already due).
         """
-        if interval <= 0:
-            return 0.0
-        lock = self._locks.setdefault(host, asyncio.Lock())
-        async with lock:
+        pace = self._pace(host)
+        async with pace.lock:
             now = time.monotonic()
-            earliest = self._last.get(host, 0.0) + interval
-            slept = 0.0
-            if now < earliest:
-                slept = earliest - now
+            slept = max(0.0, max(pace.last + interval, pace.until) - now)
+            if slept:
                 await asyncio.sleep(slept)
                 now = time.monotonic()
-            self._last[host] = now
+            pace.last = now
             return slept
 
 
@@ -217,6 +282,9 @@ class BrowserManager:
         A host returning a transport error or a "not through this route" status is retried through the browser, and
         is blacklisted, so the wasted attempt happens only once. A 404 is not a routing problem and is reported as is.
 
+        Downloads are spaced by the engine (``config.delay``), not here, but a host's 429 cooldown holds them like
+        any other request to it (see `HostPacer`).
+
         Args:
             url: The media URL to fetch.
             timeout_ms: Request timeout; defaults to ``config.request_timeout_ms``.
@@ -230,6 +298,19 @@ class BrowserManager:
             timeout_ms if timeout_ms is not None else self._config.request_timeout_ms
         )
         host = urlparse(url).netloc.lower()
+        await self._pacer.wait(host, 0.0)
+        result = await self._download(url, host, timeout, headers)
+        self._record_pace(host, result)
+        return result
+
+    async def _download(
+        self,
+        url: str,
+        host: str,
+        timeout: int,
+        headers: Mapping[str, str] | None,
+    ) -> FetchResult:
+        """The route choice behind `download`: direct first, the browser for a host that refused it."""
         if not self._config.direct_download or host in self._browser_only:
             return await self._fetch(url, timeout, headers)
         result = await fetch_direct(
@@ -330,7 +411,7 @@ class BrowserManager:
 
         This is the route for API calls, so it is where per-host politeness is enforced: successive requests to one
         host are held ``config.api_pause`` apart, whichever handler makes them. Media bytes go through `download`,
-        which is spaced by the engine instead.
+        which is spaced by the engine instead. Both routes wait out a host's 429 cooldown (see `HostPacer`).
 
         Args:
             url: The URL to fetch.
@@ -343,8 +424,30 @@ class BrowserManager:
         Raises:
             BrowserError: If the browser has not been started.
         """
-        await self._pacer.wait(urlparse(url).netloc.lower(), self._config.api_pause)
-        return await self._fetch(url, timeout_ms, headers)
+        host = urlparse(url).netloc.lower()
+        await self._pacer.wait(host, self._config.api_pause)
+        result = await self._fetch(url, timeout_ms, headers)
+        self._record_pace(host, result)
+        return result
+
+    def _record_pace(self, host: str, result: FetchResult) -> None:
+        """Feed one request's outcome back into the pacer, so a refusal holds every later request to that host."""
+        cfg = self._config
+        if is_rate_limited(result):
+            cooldown = self._pacer.penalize(
+                host,
+                base=cfg.rate_limit_backoff,
+                cap=cfg.rate_limit_max_backoff,
+                retry_after=result.retry_after,
+            )
+            if cooldown is not None:
+                log.info(
+                    "%s is rate-limiting us (HTTP 429); holding every request to it for %.1fs",
+                    host,
+                    cooldown,
+                )
+        elif result.ok:
+            self._pacer.succeeded(host)
 
     async def _fetch(
         self,
@@ -395,6 +498,7 @@ class BrowserManager:
                 error=None if resp.ok else "HTTP {}".format(resp.status),
                 wait=wait,
                 transfer=transfer,
+                retry_after=parse_retry_after(resp.headers.get("retry-after")),
             )
         except Exception as exc:
             return FetchResult(

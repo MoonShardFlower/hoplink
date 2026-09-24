@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import pytest
 
-from hoplink.core.http import FetchResult, fetch_direct, looks_blocked
+from hoplink.core.http import (
+    FetchResult,
+    fetch_direct,
+    is_rate_limited,
+    looks_blocked,
+    parse_retry_after,
+)
 
 URL = "https://media.redgifs.com/Clip.mp4"
 
@@ -145,3 +153,50 @@ def test_a_real_answer_is_not_retried_through_the_browser(status):
 
 def test_a_success_is_never_treated_as_blocked():
     assert not looks_blocked(FetchResult(ok=True, status=200, body=b"x"))
+
+
+# -- rate limits ------------------------------------------------------------
+
+
+def test_only_429_counts_as_a_rate_limit():
+    assert is_rate_limited(FetchResult(ok=False, status=429, error="HTTP 429"))
+    assert not is_rate_limited(FetchResult(ok=False, status=503, error="HTTP 503"))
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_response_carries_what_the_host_asked_for(urlopen):
+    urlopen.outcome[0] = urllib.error.HTTPError(
+        URL, 429, "Too Many Requests", {"Retry-After": "30"}, None
+    )
+    assert (await direct()).retry_after == 30.0
+
+
+@pytest.mark.asyncio
+async def test_a_response_without_a_retry_after_names_no_wait(urlopen):
+    urlopen.outcome[0] = urllib.error.HTTPError(URL, 429, "Slow down", {}, None)
+    assert (await direct()).retry_after is None
+
+
+@pytest.mark.parametrize("value", ["30", " 30 ", "30.5"])
+def test_retry_after_reads_delta_seconds(value):
+    assert parse_retry_after(value) == pytest.approx(float(value.strip()))
+
+
+def test_retry_after_reads_an_http_date():
+    when = datetime.now(timezone.utc) + timedelta(seconds=120)
+    seconds = parse_retry_after(format_datetime(when, usegmt=True))
+    assert seconds == pytest.approx(120.0, abs=2.0)
+
+
+def test_a_retry_after_date_in_the_past_means_now():
+    when = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert parse_retry_after(format_datetime(when, usegmt=True)) == 0.0
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "soonish"])
+def test_an_unusable_retry_after_names_no_wait(value):
+    assert parse_retry_after(value) is None
+
+
+def test_a_negative_retry_after_is_clamped():
+    assert parse_retry_after("-5") == 0.0

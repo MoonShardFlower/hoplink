@@ -507,7 +507,7 @@ async def test_a_non_2xx_response_is_reported_not_raised():
 
 
 async def test_a_transport_error_becomes_status_zero():
-    # _is_transient keys off status 0 to decide a timeout or reset is worth retrying.
+    # is_transient keys off status 0 to decide a timeout or reset is worth retrying.
     api = FakeRequestAPI(error=RuntimeError("Timeout 60000ms exceeded"))
     result = await started(FakeContext(api)).fetch("https://i.redd.it/a.jpg")
     assert result.ok is False
@@ -782,4 +782,183 @@ async def test_media_downloads_are_not_host_paced(clock, direct):
     mgr = started(FakeContext(FakeRequestAPI()), api_pause=1.5, direct_download=False)
     await mgr.download("https://cdn.example/a.jpg")
     await mgr.download("https://cdn.example/b.jpg")
+    assert clock.slept == []
+
+
+# -- backing off from a host that rate-limits us ----------------------------
+
+
+def penalize(pacer: HostPacer, host: str = "api.example", **kw: Any) -> float | None:
+    """Record one refusal with the defaults the config would supply."""
+    kw.setdefault("base", 15.0)
+    kw.setdefault("cap", 300.0)
+    return pacer.penalize(host, **kw)
+
+
+def refuse_repeatedly(
+    pacer: HostPacer, clock: Any, times: int, **kw: Any
+) -> List[float | None]:
+    """Refuse once per cooldown, each refusal landing just as the previous cooldown runs out (as a retry's would)."""
+    cooldowns: List[float | None] = []
+    for _ in range(times):
+        cooldowns.append(penalize(pacer, **kw))
+        clock.advance(cooldowns[-1] or 0.0)
+    return cooldowns
+
+
+async def test_a_refusal_holds_the_host_for_the_configured_backoff(clock):
+    pacer = HostPacer()
+    assert penalize(pacer) == 15.0
+    assert await pacer.wait("api.example", 0.5) == 15.0
+
+
+async def test_each_further_refusal_doubles_the_hold(clock):
+    assert refuse_repeatedly(HostPacer(), clock, 4) == [15.0, 30.0, 60.0, 120.0]
+
+
+async def test_the_hold_is_capped(clock):
+    cooldowns = refuse_repeatedly(HostPacer(), clock, 4, base=10.0, cap=25.0)
+    assert cooldowns == [10.0, 20.0, 25.0, 25.0]
+
+
+async def test_a_hosts_retry_after_wins_when_it_asks_for_longer(clock):
+    assert penalize(HostPacer(), retry_after=90.0) == 90.0
+
+
+async def test_a_short_retry_after_does_not_undercut_the_backoff(clock):
+    assert penalize(HostPacer(), retry_after=2.0) == 15.0
+
+
+async def test_even_a_hosts_retry_after_is_capped(clock):
+    assert penalize(HostPacer(), retry_after=9999.0) == 300.0
+
+
+async def test_refusals_of_requests_already_in_flight_do_not_escalate(clock):
+    # Parallel downloads come back 429 together: that is one offense, not four.
+    pacer = HostPacer()
+    assert [penalize(pacer) for _ in range(4)] == [15.0, None, None, None]
+    assert await pacer.wait("api.example", 0.0) == 15.0
+
+
+async def test_a_refusal_holds_every_request_to_that_host(clock):
+    # The point of putting this in the pacer: the next caller pays for it too, not just the retry.
+    pacer = HostPacer()
+    penalize(pacer)
+    waits = [pacer.wait("api.example", 0.0) for _ in range(2)]
+    assert await asyncio.gather(*waits) == [15.0, 0.0]
+
+
+async def test_after_the_cooldown_the_configured_pace_resumes(clock):
+    pacer = HostPacer()
+    penalize(pacer)
+    await pacer.wait("api.example", 0.5)
+    assert await pacer.wait("api.example", 0.5) == 0.5
+
+
+async def test_a_cooldown_holds_even_when_pacing_is_switched_off(clock):
+    pacer = HostPacer()
+    penalize(pacer)
+    assert await pacer.wait("api.example", 0.0) == 15.0
+
+
+async def test_only_the_offending_host_is_backed_off_from(clock):
+    pacer = HostPacer()
+    penalize(pacer)
+    assert await pacer.wait("other.example", 0.5) == 0.0
+
+
+async def test_a_success_starts_the_next_cooldown_over(clock):
+    pacer = HostPacer()
+    refuse_repeatedly(pacer, clock, 2)  # 15s, then 30s
+    pacer.succeeded("api.example")
+    assert penalize(pacer) == 15.0
+
+
+async def test_a_success_on_an_untroubled_host_costs_nothing(clock):
+    pacer = HostPacer()
+    pacer.succeeded("api.example")
+    assert await pacer.wait("api.example", 0.5) == 0.0
+
+
+async def test_reset_forgets_a_hosts_cooldown_and_strikes(clock):
+    pacer = HostPacer()
+    refuse_repeatedly(pacer, clock, 2)
+    penalize(pacer)
+    pacer.reset()
+    assert await pacer.wait("api.example", 0.5) == 0.0
+    assert penalize(pacer) == 15.0
+
+
+async def test_a_429_api_fetch_backs_the_host_off(clock):
+    mgr = started(
+        FakeContext(FakeRequestAPI(FakeResponse(status=429, headers={}))),
+        api_pause=0.5,
+        rate_limit_backoff=15.0,
+    )
+    await mgr.fetch("https://api.example/v1/a")
+    await mgr.fetch("https://api.example/v1/b")
+    assert clock.slept == [15.0]
+
+
+async def test_a_429_api_fetch_honours_retry_after(clock):
+    mgr = started(
+        FakeContext(
+            FakeRequestAPI(FakeResponse(status=429, headers={"retry-after": "45"}))
+        ),
+        api_pause=0.5,
+        rate_limit_backoff=15.0,
+    )
+    await mgr.fetch("https://api.example/v1/a")
+    await mgr.fetch("https://api.example/v1/b")
+    assert clock.slept == [45.0]
+
+
+async def test_a_429_fetch_reports_what_the_host_asked_for(clock):
+    mgr = started(
+        FakeContext(
+            FakeRequestAPI(FakeResponse(status=429, headers={"retry-after": "45"}))
+        )
+    )
+    assert (await mgr.fetch("https://api.example/v1/a")).retry_after == 45.0
+
+
+async def test_a_429_hold_is_logged(clock, caplog):
+    mgr = started(FakeContext(FakeRequestAPI(FakeResponse(status=429, headers={}))))
+    with caplog.at_level(logging.INFO, logger="hoplink.core.browser"):
+        await mgr.fetch("https://api.example/v1/a")
+    assert "rate-limiting us" in caplog.text
+
+
+async def test_an_answering_host_is_not_backed_off_from(clock):
+    mgr = started(FakeContext(FakeRequestAPI()), api_pause=0.5)
+    await mgr.fetch("https://api.example/v1/a")
+    await mgr.fetch("https://api.example/v1/b")
+    assert clock.slept == [0.5]
+
+
+async def test_a_hold_already_running_is_logged_once(clock, caplog):
+    mgr = started(FakeContext())
+    refused = FetchResult(ok=False, status=429, error="HTTP 429")
+    with caplog.at_level(logging.INFO, logger="hoplink.core.browser"):
+        mgr._record_pace("cdn.example", refused)
+        # A request that was in flight when the first refusal came back.
+        mgr._record_pace("cdn.example", refused)
+    assert caplog.text.count("rate-limiting us") == 1
+
+
+async def test_a_429_download_holds_later_downloads_from_that_host(clock, direct):
+    direct.result = FetchResult(ok=False, status=429, error="HTTP 429")
+    mgr = started(FakeContext(FakeRequestAPI()), rate_limit_backoff=15.0)
+    await mgr.download("https://cdn.example/a.jpg")
+    direct.result = None
+    await mgr.download("https://cdn.example/b.jpg")
+    assert clock.slept == [15.0]
+
+
+async def test_a_429_download_leaves_other_hosts_alone(clock, direct):
+    direct.result = FetchResult(ok=False, status=429, error="HTTP 429")
+    mgr = started(FakeContext(FakeRequestAPI()), rate_limit_backoff=15.0)
+    await mgr.download("https://cdn.example/a.jpg")
+    direct.result = None
+    await mgr.download("https://i.redd.it/b.jpg")
     assert clock.slept == []

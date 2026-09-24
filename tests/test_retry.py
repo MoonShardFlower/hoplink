@@ -12,6 +12,7 @@ import pytest
 from hoplink.core import extractor as extractor_module
 from hoplink.core.browser import FetchResult
 from hoplink.core.extractor import AsyncHoplinkExtractor
+from hoplink.core.http import is_transient
 from hoplink.models.config import ExtractorConfig
 from hoplink.models.media import MediaCandidate, MediaType
 
@@ -84,7 +85,7 @@ async def test_transient_failures_are_retried_then_succeed(no_sleep, status):
 
 async def test_transport_error_is_retried():
     # BrowserManager reports a timeout/reset as status 0 with an error string.
-    assert AsyncHoplinkExtractor._is_transient(
+    assert is_transient(
         FetchResult(ok=False, status=0, error="error: Timeout 60000ms exceeded")
     )
 
@@ -188,6 +189,27 @@ async def test_backoff_never_dips_below_delay(no_sleep):
     assert no_sleep == [2.0, 2.0]
 
 
+async def test_a_rate_limited_download_is_retried_without_a_backoff_of_its_own(
+    no_sleep,
+):
+    # Same rule as the API route: the download route holds the host for its cooldown (HostPacer).
+    ctx = FakeContext(
+        [FetchResult(ok=False, status=429, error="HTTP 429")],
+        config=ExtractorConfig(max_retries=3, retry_backoff=1.0, delay=0.0),
+    )
+    await download(ctx)
+    assert no_sleep == []
+
+
+async def test_a_rate_limited_download_draws_on_the_rate_limit_budget(no_sleep):
+    ctx = FakeContext(
+        [FetchResult(ok=False, status=429, error="HTTP 429")],
+        config=ExtractorConfig(max_retries=1, rate_limit_retries=4),
+    )
+    await download(ctx)
+    assert len(ctx.fetches) == 5  # the first attempt plus four, not max_retries' one
+
+
 async def test_no_sleep_after_the_final_attempt(no_sleep):
     ctx = FakeContext(
         [FetchResult(ok=False, status=503, error="HTTP 503")],
@@ -210,9 +232,15 @@ def test_negative_retry_backoff_rejected():
         ExtractorConfig(retry_backoff=-1.0)
 
 
+def test_negative_rate_limit_backoff_rejected():
+    with pytest.raises(ValueError, match="rate_limit_backoff must be >= 0"):
+        ExtractorConfig(rate_limit_backoff=-1.0)
+
+
 def test_retry_defaults():
     cfg = ExtractorConfig()
     assert cfg.max_retries == 2 and cfg.retry_backoff == 1.0
+    assert cfg.rate_limit_backoff == 15.0 and cfg.rate_limit_retries == 4
 
 
 # -- retries are visible under --verbose -----------------------------------
@@ -223,7 +251,7 @@ async def test_retry_is_logged_at_info(no_sleep, caplog):
         [FetchResult(ok=False, status=503, error="HTTP 503"), JPEG],
         config=ExtractorConfig(max_retries=1),
     )
-    with caplog.at_level("INFO", logger="hoplink.core.extractor"):
+    with caplog.at_level("INFO", logger="hoplink.core.http"):
         await download(ctx)
     messages = [r.getMessage() for r in caplog.records]
     assert any("retrying in 1.0s" in m and "HTTP 503" in m for m in messages)

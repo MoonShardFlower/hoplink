@@ -320,6 +320,22 @@ Only transient failures are retried (transport errors, 408, 425, 429, and any 5x
 `Content-Type` is final. Backoff is exponential and never drops below `--delay`; a config file can tune its base 
 through `retry_backoff`.
 
+### Rate limits
+
+A `429` is not a flaky response: the host is naming our request rate as the problem, and a one-second retry does not
+address it. So the host is held for a cooldown instead -- `rate_limit_backoff` (15s by default), doubling with each
+consecutive refusal up to `rate_limit_max_backoff`, or whatever the host's `Retry-After` header asked for when that is
+longer. A request that answers normally resets the doubling. A rate-limited request may be retried up to
+`rate_limit_retries` times (or `--max-retries`, if that is more).
+
+The cooldown is imposed on the host, not just on the request that was refused: every request to it waits, API calls
+and downloads alike, whichever handler or job makes it. Refusals of requests that were already in flight when the
+cooldown began count as the same one, so a burst of parallel downloads does not escalate it.
+
+```
+16:48:52 INFO  api.redgifs.com is rate-limiting us (HTTP 429); holding every request to it for 15.0s
+```
+
 ## Console output and logging
 
 Two independent channels: progress goes to **stdout**, the library's diagnostics go to **stderr**.
@@ -434,20 +450,23 @@ client_id = "abc123"
 
 A config file also reaches settings the command line does not expose:
 
-| Key                    | Default           | Description                                                                                                                                                                         |
-|------------------------|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `host_options`         | none              | Per-host settings, as a table per host (see above).                                                                                                                                 |
-| `viewport`             | `[1366, 900]`     | Browser window size, `[width, height]`.                                                                                                                                             |
-| `locale`               | `"en-US"`         | Browser locale (`Accept-Language`, date and number formats).                                                                                                                        |
-| `scroll_px`            | `18000`           | Pixels scrolled per step. Lower it if posts seem to be skipped.                                                                                                                     |
-| `api_pause`            | `0.5`             | Seconds between successive requests to one third-party host, e.g. walking a RedGIFs profile under `--scrape-all`. Unlike `--scroll-pause`, nothing is waiting for a page to render. |
-| `retry_backoff`        | `1.0`             | Base seconds for exponential retry backoff.                                                                                                                                         |
-| `manifest_flush_every` | `1`               | Rewrite `manifest.json` after every N saved files.                                                                                                                                  |
-| `nav_timeout_ms`       | `60000`           | Page-navigation timeout.                                                                                                                                                            |
-| `post_wait_timeout_ms` | `30000`           | How long to wait for the first post cards to render.                                                                                                                                |
-| `gallery_wait_ms`      | `2000`            | Flat settle time after opening a gallery. `0` disables it.                                                                                                                          |
-| `request_timeout_ms`   | `60000`           | Per-download request timeout.                                                                                                                                                       |
-| `default_media_types`  | `"image,gallery"` | Selection used when no `types` is given (mostly for library use).                                                                                                                   |
+| Key                      | Default           | Description                                                                                                                                                                         |
+|--------------------------|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `host_options`           | none              | Per-host settings, as a table per host (see above).                                                                                                                                 |
+| `viewport`               | `[1366, 900]`     | Browser window size, `[width, height]`.                                                                                                                                             |
+| `locale`                 | `"en-US"`         | Browser locale (`Accept-Language`, date and number formats).                                                                                                                        |
+| `scroll_px`              | `18000`           | Pixels scrolled per step. Lower it if posts seem to be skipped.                                                                                                                     |
+| `api_pause`              | `0.5`             | Seconds between successive requests to one third-party host, e.g. walking a RedGIFs profile under `--scrape-all`. Unlike `--scroll-pause`, nothing is waiting for a page to render. |
+| `retry_backoff`          | `1.0`             | Base seconds for exponential retry backoff.                                                                                                                                         |
+| `rate_limit_backoff`     | `15.0`            | Seconds a host is left alone after it answers `429`, doubling per consecutive refusal. A longer `Retry-After` wins.                                                                 |
+| `rate_limit_max_backoff` | `300.0`           | Ceiling for that wait, so a run cannot stall indefinitely.                                                                                                                          |
+| `rate_limit_retries`     | `4`               | Extra attempts for a rate-limited request, when more than `--max-retries`.                                                                                                          |
+| `manifest_flush_every`   | `1`               | Rewrite `manifest.json` after every N saved files.                                                                                                                                  |
+| `nav_timeout_ms`         | `60000`           | Page-navigation timeout.                                                                                                                                                            |
+| `post_wait_timeout_ms`   | `30000`           | How long to wait for the first post cards to render.                                                                                                                                |
+| `gallery_wait_ms`        | `2000`            | Flat settle time after opening a gallery. `0` disables it.                                                                                                                          |
+| `request_timeout_ms`     | `60000`           | Per-download request timeout.                                                                                                                                                       |
+| `default_media_types`    | `"image,gallery"` | Selection used when no `types` is given (mostly for library use).                                                                                                                   |
 
 ### Dates in TOML
 

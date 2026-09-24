@@ -85,6 +85,16 @@ class ExtractorConfig:
     #: base seconds for exponential retry backoff; the wait never dips below ``delay``
     retry_backoff: float = 1.0
 
+    # -- rate limits ----------------------------------------------------
+    # A host answering 429 is held for a cooldown, doubling with each consecutive refusal. Every request to that
+    # host waits it out, whichever handler or job makes it.
+    #: seconds a host is left alone after it first answers 429 (a ``Retry-After`` asking for longer wins)
+    rate_limit_backoff: float = 15.0
+    #: ceiling for that wait however many refusals pile up, so a run cannot stall indefinitely
+    rate_limit_max_backoff: float = 300.0
+    #: extra attempts for a rate-limited request, when more than ``max_retries``
+    rate_limit_retries: int = 4
+
     # -- timeouts (milliseconds) ----------------------------------------
     nav_timeout_ms: int = 60000
     post_wait_timeout_ms: int = 30000
@@ -111,7 +121,14 @@ class ExtractorConfig:
             self, "default_media_types", MediaType.coerce(self.default_media_types)
         )
         self._require_non_negative(
-            "scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"
+            "scroll_pause",
+            "delay",
+            "api_pause",
+            "max_retries",
+            "retry_backoff",
+            "rate_limit_backoff",
+            "rate_limit_max_backoff",
+            "rate_limit_retries",
         )
         self._require_positive(
             "max_stale_scrolls",

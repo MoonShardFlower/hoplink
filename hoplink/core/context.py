@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlparse
@@ -13,13 +12,11 @@ from ..models.config import ExtractorConfig
 from ..models.filters import coerce_str_list
 from ..models.media import MediaType
 from ..models.source import Source
-from .http import is_transient
+from .http import fetch_with_retries
 from .state import HostState, SharedState
 
 if TYPE_CHECKING:  # pragma: no cover
     from .browser import BrowserManager, FetchResult
-
-log = logging.getLogger(__name__)
 
 
 class ExtractionContext:
@@ -112,41 +109,32 @@ class ExtractionContext:
         """
         GET a URL through the browser context (cookies, UA, and all), retrying transient failures.
 
-        This is the route for a handler's API calls. Two protections: successive requests to one host are spaced
-        ``config.api_pause`` apart, and transient failures (a rate-limit, a 5xx, a dropped connection) are retried with
-        exponential backoff. Unrecoverable errors (404, 403, 401) are returned.
+        This is the route for a handler's API calls. Successive requests to one host are spaced ``config.api_pause``
+        apart, and transient failures (a 5xx, a dropped connection) are retried with exponential backoff (see
+        `fetch_with_retries`). Unrecoverable errors (404, 403, 401) are returned.
+
+        A rate limit (429) is waited out by the fetch route, which holds the host for a cooldown, and may be
+        retried up to ``config.rate_limit_retries`` times.
 
         Args:
             url: The URL to fetch.
             headers: Extra request headers (e.g. an ``Authorization`` bearer for a third-party API).
-            retries: Extra attempts after the first. Defaults to ``config.max_retries``; pass 0 for a single try.
+            retries: Extra attempts after the first, for every kind of failure alike. Defaults to
+                ``config.max_retries`` (and ``config.rate_limit_retries`` for a rate limit); pass 0 for a single try.
 
         Returns:
             The fetch outcome of the last attempt, including body and content type.
         """
-        attempts = (self.config.max_retries if retries is None else max(0, retries)) + 1
-        result = await self._browser.fetch(
-            url, self.config.request_timeout_ms, headers=headers
+        cfg = self.config
+        return await fetch_with_retries(
+            lambda: self._browser.fetch(url, cfg.request_timeout_ms, headers=headers),
+            retries=cfg.max_retries if retries is None else max(0, retries),
+            # A caller waiving its retries waives them for a rate limit too.
+            rate_limit_retries=cfg.rate_limit_retries if retries is None else 0,
+            backoff=cfg.retry_backoff,
+            floor=cfg.api_pause,
+            label=url,
         )
-        for attempt in range(1, attempts):
-            if result.ok or not is_transient(result):
-                return result
-            delay = max(
-                self.config.api_pause, self.config.retry_backoff * (2 ** (attempt - 1))
-            )
-            log.info(
-                "attempt %d/%d for %s failed (%s); retrying in %.1fs",
-                attempt,
-                attempts,
-                url,
-                result.error,
-                delay,
-            )
-            await asyncio.sleep(delay)
-            result = await self._browser.fetch(
-                url, self.config.request_timeout_ms, headers=headers
-            )
-        return result
 
     async def download(
         self, url: str, headers: Mapping[str, str] | None = None

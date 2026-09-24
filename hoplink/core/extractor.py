@@ -48,7 +48,7 @@ from ..storage import (
 )
 from .browser import BrowserManager, FetchResult
 from .context import ExtractionContext
-from .http import is_transient
+from .http import fetch_with_retries
 from .state import SharedState
 from .timing import Timings
 
@@ -645,11 +645,6 @@ class AsyncHoplinkExtractor:
         }
 
     @staticmethod
-    def _is_transient(result: FetchResult) -> bool:
-        """Whether a failed fetch is worth retrying (see `hoplink.core.http.is_transient`)."""
-        return is_transient(result)
-
-    @staticmethod
     def _validate(
         ctx: ExtractionContext, cand: MediaCandidate, result: FetchResult
     ) -> FetchResult:
@@ -682,9 +677,9 @@ class AsyncHoplinkExtractor:
         """
         Fetch a candidate, retrying transient failures, and validate its Content-Type.
 
-        A flaky CDN shouldn't turn into a permanent entry in ``result.failures``, so a fetch that fails
-        transiently (see `_is_transient`) is retried up to ``config.max_retries`` times with exponential
-        backoff. Content-Type rejections are final: they'd fail identically on every attempt.
+        A flaky CDN shouldn't turn into a permanent entry in ``result.failures``, so a transient failure is retried
+        (see `fetch_with_retries`), backing off exponentially but never faster than ``config.delay``. Content-Type
+        rejections are final: they'd fail identically on every attempt.
 
         Args:
             ctx: The active extraction context.
@@ -699,31 +694,18 @@ class AsyncHoplinkExtractor:
         if cand.body is not None:
             return FetchResult(ok=True, status=200, body=cand.body)
         cfg = ctx.config
-        attempts = cfg.max_retries + 1
-        result = FetchResult(ok=False, error="no attempt made")
-        wait = transfer = 0.0
-        for attempt in range(1, attempts + 1):
-            # media goes the direct route when it can, handlers' API calls stay on the browser where the cookies matter.
-            result = await ctx.download(cand.url, headers=cand.headers)
-            wait += result.wait
-            transfer += result.transfer
-            result = result._replace(wait=wait, transfer=transfer)
-            if result.ok:
-                return AsyncHoplinkExtractor._validate(ctx, cand, result)
-            if attempt >= attempts or not AsyncHoplinkExtractor._is_transient(result):
-                return result
-            # Back off exponentially, but never faster than the job's politeness delay.
-            delay = max(cfg.delay, cfg.retry_backoff * (2 ** (attempt - 1)))
-            log.info(
-                "attempt %d/%d for %s failed (%s); retrying in %.1fs",
-                attempt,
-                attempts,
-                cand.url,
-                result.error,
-                delay,
-            )
-            await asyncio.sleep(delay)
-        return result
+        # media goes the direct route when it can, handlers' API calls stay on the browser where the cookies matter.
+        result = await fetch_with_retries(
+            lambda: ctx.download(cand.url, headers=cand.headers),
+            retries=cfg.max_retries,
+            rate_limit_retries=cfg.rate_limit_retries,
+            backoff=cfg.retry_backoff,
+            floor=cfg.delay,
+            label=cand.url,
+        )
+        if not result.ok:
+            return result
+        return AsyncHoplinkExtractor._validate(ctx, cand, result)
 
     @staticmethod
     async def _download_stream(

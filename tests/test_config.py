@@ -74,17 +74,25 @@ def test_an_unknown_default_media_type_is_rejected():
 # -- validation: non-negative fields ----------------------------------------
 
 
-@pytest.mark.parametrize(
-    "field", ["scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"]
-)
+NON_NEGATIVE = [
+    "scroll_pause",
+    "delay",
+    "api_pause",
+    "max_retries",
+    "retry_backoff",
+    "rate_limit_backoff",
+    "rate_limit_max_backoff",
+    "rate_limit_retries",
+]
+
+
+@pytest.mark.parametrize("field", NON_NEGATIVE)
 def test_a_negative_pacing_field_is_rejected(field):
     with pytest.raises(ValueError, match="{} must be >= 0".format(field)):
         ExtractorConfig(**{field: -1})
 
 
-@pytest.mark.parametrize(
-    "field", ["scroll_pause", "delay", "api_pause", "max_retries", "retry_backoff"]
-)
+@pytest.mark.parametrize("field", NON_NEGATIVE)
 def test_zero_is_allowed_for_pacing(field):
     # Tests and local runs disable pacing entirely.
     assert getattr(ExtractorConfig(**{field: 0}), field) == 0
@@ -156,6 +164,17 @@ def test_the_pacing_defaults_are_relaxed():
     # API paging waits on no renderer, so it is paced far more lightly than scrolling.
     assert config.api_pause == 0.5
     assert config.api_pause < config.scroll_pause
+
+
+def test_a_rate_limit_is_backed_off_from_far_harder_than_a_flaky_response():
+    # A 429 is the host naming our rate as the problem, which a one-second retry does not address.
+    config = ExtractorConfig()
+    assert config.rate_limit_backoff == 15.0
+    assert config.rate_limit_backoff > config.retry_backoff * 10
+    assert config.rate_limit_max_backoff == 300.0
+    # And it is worth more attempts, because giving up early is what sends the next call straight back out.
+    assert config.rate_limit_retries == 4
+    assert config.rate_limit_retries > config.max_retries
 
 
 # -- replace ----------------------------------------------------------------
