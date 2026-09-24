@@ -6,12 +6,12 @@
 [![Python](https://img.shields.io/badge/python-3.12%20|%203.13%20|%203.14-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Composable, browser-driven Reddit media extraction that hops outbound links to their real host — a Python library
-with a command-line front end.
+Composable, browser-driven Reddit media extraction that hops outbound links to their real host, implemented as a Python 
+library with a command-line front end.
 
-Reddit blocks plain HTTP access to its JSON and OAuth endpoints from many networks. `hoplink` renders listings
-in a real browser (Playwright and Chromium), reads post data out of the rendered page, and downloads the media those 
-posts reference.
+Reddit blocks plain HTTP access to its JSON and OAuth endpoints from many networks. `hoplink` renders listings in a
+browser (Playwright and Chromium), reads post data out of the rendered page, and downloads the media those posts
+reference.
 
 ## Contents
 
@@ -33,12 +33,12 @@ posts reference.
 
 ## Why a browser
 
-The two conventional ways to read Reddit programmatically are its JSON API and OAuth (through a client such as
-PRAW). The JSON API is blocked for large parts of the IP space, and OAuth requires an app registration Reddit is
-unlikely to approve for a scraper. Driving a browser is slower than either, but it offers two things they do not:
+The two conventional ways to read Reddit programmatically are its JSON API and OAuth (e.g., via PRAW). The JSON API is 
+largely blocked, and OAuth requires an app registration Reddit is unlikely to approve for a scraper. 
+Driving a browser is slower, but it offers two things they do not:
 
 - **No account required.** Only NSFW and private sources need a login, supplied through a persistent browser profile.
-- **Media hosted off Reddit.** A per-host resolver can follow a link out to its real source (e.g. RedGIFs) and even 
+- **Media hosted off Reddit.** A per-host resolver can follow a link out to its real source (e.g., RedGIFs) and even 
   scrape the linked uploader's entire profile if requested.
 
 Disadvantages:
@@ -213,11 +213,11 @@ with HoplinkExtractor(headless=True) as hle:
 
 ## Documentation
 
-| Where                                                           | What                                                                              |
-|-----------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| [docs/cli.md](docs/cli.md)                                      | Every command-line option, the post filters, and the TOML config-file format      |
-| [docs/lib.md](docs/lib.md)                                      | The Python API: both facades, configuration, events, storage, handlers, resolvers |
-| [examples/](examples/)                                          | Ready-to-run config files                                                         |
+| Where                                                    | What                                                                              |
+|----------------------------------------------------------|-----------------------------------------------------------------------------------|
+| [docs/cli.md](docs/cli.md)                               | Every command-line option, the post filters, and the TOML config-file format      |
+| [docs/lib.md](docs/lib.md)                               | The Python API: both facades, configuration, events, storage, handlers, resolvers |
+| [examples/](examples/)                                   | Ready-to-run config files                                                         |
 | [readthedocs](https://hoplink.readthedocs.io/en/latest/) | Generated API reference                                                           |
 
 `hoplink --help` covers the common cases; [docs/cli.md](docs/cli.md) fills in the rest.

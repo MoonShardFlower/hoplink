@@ -296,9 +296,9 @@ Defaults are relaxed to avoid throttling:
 | `--max-stale-scrolls N`    | `10`    | Give up scrolling after this many consecutive scrolls that surface no new posts.                                     |
 | `--max-retries N`          | `2`     | Extra attempts for a download that fails transiently. `0` disables retrying.                                         |
 
-`--download-concurrency` parallelizes the files *of a single post* for example an entire RedGIFs profile pulled in by 
+`--download-concurrency` parallelizes the files *of a single post*, for example, an entire RedGIFs profile pulled in by 
 `--scrape-all redgifs`. Posts are still handled one after another, so a listing of single-image posts sees no speedup 
-from it. Filenames, hash de-duplication, the manifest, and the event stream are unaffected: downloads run in parallel
+from it. Filenames, hash deduplication, the manifest, and the event stream are unaffected: downloads run in parallel
 but are recorded in candidate order, exactly as with the default of `1`.
 
 Workers pull the next candidate as soon as they are free, so one slow file occupies only its own slot and does not
