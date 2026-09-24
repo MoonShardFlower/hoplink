@@ -21,9 +21,15 @@ import re
 import unicodedata
 from urllib.parse import urlparse
 
-#: how many characters of a title survive into a file name. Windows caps a whole path at 260 characters by default,
-#: and the slug is only part of one, so keep it well short.
-MAX_SLUG_LENGTH = 60
+#: how many characters of a title survive into a file name. Windows caps a whole path at 260 characters unless long
+#: paths are enabled, and the slug is only part of one: the rest is the output directory, the source folder, an
+#: optional collection folder (itself a slug), the index, the part number, and the extension. 120 leaves room for
+#: all of that under a reasonably shallow output directory while keeping most titles intact.
+MAX_SLUG_LENGTH = 120
+
+#: how many characters of a collection's name survive into its folder name. A collection's name lands in the path
+#: twice — once as the folder, once as the slug of every file inside it — so it gets a tighter cap than a post title.
+MAX_COLLECTION_SLUG_LENGTH = 60
 
 #: MS-DOS device names. Windows refuses these as a file or folder name.
 _RESERVED = frozenset(

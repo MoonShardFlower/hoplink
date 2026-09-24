@@ -109,7 +109,7 @@ A single flair filter on a subreddit is pushed upstream into the listing URL, so
 
 Files land in a per-source directory under `--out`, named `<index>_<slug>.<ext>` for example
 `0001_Sunset_Over_Lofoten.jpg`. The index records arrival order and the slug is derived from the post's title and 
-sanitized (Windows' reserved characters and device names removed, length capped at 60 characters cut back to a word 
+sanitized (Windows' reserved characters and device names removed, length capped at 120 characters cut back to a word 
 boundary). A post whose title slugs to nothing keeps the bare `0001.jpg`. A post that resolves to several files inserts 
 a part number: `0001_01_...`, `0001_02_...`.
 

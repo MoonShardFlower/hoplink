@@ -165,9 +165,9 @@ lookup, and its network requests, per recognized link.
 | `--dedupe`      | off         | Skip saving a file whose SHA-256 matches one already stored in the same folder. |
 | `--report PATH` | none        | Write a machine-readable run report.                                            |
 
-Files are named `<index>_<slug>.<ext>` — `0001_Sunset_Over_Lofoten.jpg`. The index records arrival order. the slug
-comes from the post's title, sanitized (Windows' reserved characters and device names removed, length capped at 60 
-characters and cut back to a word boundary). A post whose title slugs to nothing keeps the bare `0001.jpg`. A post that 
+Files are named `<index>_<slug>.<ext>` — `0001_Sunset_Over_Lofoten.jpg`. The index records arrival order. The slug
+comes from the post's title, sanitized (Windows' reserved characters and device names removed, length capped at 120 
+characters, and cut back to a word boundary). A post whose title slugs to nothing keeps the bare `0001.jpg`. A post that 
 resolves to several files inserts a part number, so a gallery's slides are `0001_01_...`, `0001_02_...`.
 
 Each source directory holds a `manifest.json` recording where every file came from. Re-running a command skips media

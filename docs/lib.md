@@ -405,8 +405,9 @@ media_filename(7, "jpg", slug="Hello_World")    # "0007_Hello_World.jpg"
 ```
 
 Slugs are sanitized for Windows (reserved characters and device names are removed) and the length is capped
-(`MAX_SLUG_LENGTH`, 60 characters, cut back to a word boundary) so a deep output directory does not let a path exceed
-`MAX_PATH`.
+(`MAX_SLUG_LENGTH`, 120 characters, cut back to a word boundary) so a deep output directory does not let a path exceed
+`MAX_PATH`. A collection's name is capped tighter (`MAX_COLLECTION_SLUG_LENGTH`, 60 characters) because it lands in the
+path twice: once as the folder, once as the slug of every file inside it.
 
 Each source folder holds a `manifest.json` recording every file's originating post. This makes runs resumable:
 a second run skips files already on disk, and continues the numbering rather than restarting at 1.

@@ -36,6 +36,7 @@ from ..models.post import Post
 from ..models.result import ExtractionResult
 from ..models.source import Source, parse_source
 from ..storage import (
+    MAX_COLLECTION_SLUG_LENGTH,
     FilesystemStorage,
     Manifest,
     ManifestSet,
@@ -587,7 +588,11 @@ class AsyncHoplinkExtractor:
         """
         groups: dict[str, List[MediaCandidate]] = {}
         for cand in candidates:
-            name = slugify(cand.collection) if cand.collection else ""
+            name = (
+                slugify(cand.collection, max_length=MAX_COLLECTION_SLUG_LENGTH)
+                if cand.collection
+                else ""
+            )
             groups.setdefault(name, []).append(cand)
         return list(groups.items())
 

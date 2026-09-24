@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from hoplink.storage.naming import (
+    MAX_COLLECTION_SLUG_LENGTH,
     MAX_SLUG_LENGTH,
     collection_key,
     extension_for_content_type,
@@ -82,6 +83,16 @@ def test_a_single_over_long_word_is_cut_hard():
 
 def test_the_length_cap_is_adjustable():
     assert slugify("Hello World", max_length=5) == "Hello"
+
+
+def test_a_collection_name_is_capped_tighter_than_a_title():
+    # A collection's name lands in the path twice, as its folder and in every file name inside it, so a
+    # full-length title cap would let a collection's paths run over twice the length of a post's.
+    assert MAX_COLLECTION_SLUG_LENGTH < MAX_SLUG_LENGTH
+    assert (
+        slugify("x" * 200, max_length=MAX_COLLECTION_SLUG_LENGTH)
+        == "x" * MAX_COLLECTION_SLUG_LENGTH
+    )
 
 
 @pytest.mark.parametrize("name", ["CON", "nul", "CoM1", "LPT9"])
