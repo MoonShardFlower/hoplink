@@ -240,15 +240,32 @@ Special behaviours:
 |-----------------------|------------------------|-----------------------------------------------------------------------------|
 | `--show`              | off (headless)         | Show the browser window.                                                    |
 | `--profile DIR`       | none                   | Persistent browser profile directory, letting a login survive between runs. |
+| `--login`             | off                    | Sign in to Reddit and exit. Scrapes nothing.                                |
 | `--user-agent STRING` | current desktop Chrome | User-Agent sent to Reddit.                                                  |
 
-Logged-out browsing cannot see NSFW or some private content. Sign in once with a visible window, then reuse the
-profile headlessly:
+### Signing in
+
+Logged-out browsing cannot see NSFW or some private content. `--login` is an errand of its own: it opens a visible
+window on Reddit's login page, waits for you to finish signing in, stores the session in `--profile`, and exits. No
+source is opened and nothing is downloaded, so it takes no sources and needs none.
 
 ```bash
-hoplink r/somensfwsub --show --profile ./.reddit_profile   # log in once
-hoplink r/somensfwsub --profile ./.reddit_profile          # reuses the session
+hoplink --login --profile ./.reddit_profile         # sign in once
+hoplink r/somensfwsub --profile ./.reddit_profile   # every later run reuses the session, headless
 ```
+
+The window is always shown, whatever `--show` says: a sign-in nobody can see cannot be completed. `--profile` is
+required, since an incognito session is thrown away the moment the browser closes.
+
+Run it again on the same profile to check that session:
+
+```
+$ hoplink --login --profile ./.reddit_profile
+Already signed in as u/someuser. Session stored in ./.reddit_profile
+```
+
+The exit code follows: `0` when the profile ends up signed in, `1` when it does not (the window was closed, or five
+minutes passed without a sign-in), so a setup script can act on it.
 
 The profile directory is created on first use. It holds a logged-in session, so keep it secret.
 

@@ -77,8 +77,15 @@ Async:
 NSFW and private sources
 ------------------------
 
-Logged-out browsing can't see NSFW or some private content. Point ``profile_dir`` at a persistent browser profile and
-run once headful (``headless=False``) to sign in. The session is reused on later runs.
+Logged-out browsing can't see NSFW or some private content. A session lives in a persistent browser profile, and
+:func:`hoplink.login` puts one there: it opens Reddit's login page in a visible window and waits for the sign-in,
+scraping nothing. Point ``profile_dir`` at that same directory afterwards and every run reuses the session::
+
+    from hoplink import ExtractorConfig, login
+
+    login(ExtractorConfig(profile_dir="./.reddit_profile"))
+
+From the command line that is ``hoplink --login --profile ./.reddit_profile``.
 
 API reference
 -------------

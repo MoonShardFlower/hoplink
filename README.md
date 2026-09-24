@@ -223,8 +223,16 @@ with HoplinkExtractor(headless=True) as hle:
 
 ## NSFW and private sources
 
-Logged-out browsing cannot see NSFW or some private content. Point a persistent browser profile at the run and sign in 
-once. the session is reused afterwards. See [docs/cli.md](docs/cli.md#browser) or [docs/lib.md](docs/lib.md#nsfw-and-private-sources).
+Logged-out browsing cannot see NSFW or some private content. `--login` opens a browser window, waits for you to sign 
+in, and stores the session in a persistent profile:
+
+```bash
+hoplink --login --profile ./.rprofile    # sign in once
+hoplink r/nsfwsub --profile ./.rprofile   # every later run reuses the session
+```
+
+Run `--login` again on the same profile to check it is still signed in. See [docs/cli.md](docs/cli.md#browser) or 
+[docs/lib.md](docs/lib.md#nsfw-and-private-sources).
 
 ## License
 

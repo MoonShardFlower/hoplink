@@ -604,18 +604,38 @@ Reading the body costs one page visit per text post with or without this flag. F
 
 ## NSFW and private sources
 
-Logged-out browsing cannot see NSFW or some private content. Point `profile_dir` at a persistent browser profile
-and run once headful to sign in. The session is reused on later runs.
+Logged-out browsing cannot see NSFW or some private content. A session lives in a persistent browser profile, and
+`login` puts one there: it opens Reddit's login page in a visible window, waits for the sign-in, and confirms it.
+No source is opened and nothing is downloaded.
 
 ```python
-# once, to log in
-with HoplinkExtractor(headless=False, profile_dir="./.reddit_profile") as hle:
-    hle.extract("r/somensfwsub")
+from hoplink import ExtractorConfig, HoplinkExtractor, login
 
-# afterwards
+# once, to sign in (blocks until you finish, or until `timeout` seconds pass; five minutes by default)
+result = login(ExtractorConfig(profile_dir="./.reddit_profile"), on_status=print)
+if not result.ok:
+    raise SystemExit("not signed in: {}".format(result.reason))
+
+# afterwards, headless
 with HoplinkExtractor(profile_dir="./.reddit_profile") as hle:
     hle.extract("r/somensfwsub")
 ```
+
+`login` returns a `LoginResult`:
+
+| Field               | Meaning                                                                                 |
+|---------------------|-------------------------------------------------------------------------------------------|
+| `ok`                | whether the profile ended up signed in                                                  |
+| `username`          | the account name, when the check that confirmed the session carried one                 |
+| `reason`            | why an unsuccessful attempt ended, phrased for a user                                   |
+| `already_logged_in` | the profile was signed in when the window opened, so nothing had to be typed            |
+
+Calling it on a profile that is already signed in returns immediately with `already_logged_in`, which makes it a
+session check as much as a sign-in. `headless` is overridden for the duration: a sign-in nobody can see cannot be
+completed. Without a `profile_dir` it raises `ValueError`, since an incognito session is thrown away at close.
+
+`async_login` is the same thing for callers with an event loop of their own, and `login_state(browser, page)` answers
+the underlying question ("is this browser signed in?") for one already started `BrowserManager`.
 
 The directory is created on first use. It holds a logged-in session, so keep it secret.
 
