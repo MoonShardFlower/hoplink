@@ -69,7 +69,7 @@ Disadvantages:
 | **Image**     | The full-resolution `i.redd.it` original the card points at.                                                                                                                                                                                                                                               |
 | **Gallery**   | Every slide. A listing card renders only the first few slides regardless of the gallery's size, so the post page is opened and the carousel is read.                                                                                                                                                       |
 | **Video**     | A pre-muxed MP4 (video and audio) at the highest offered resolution. A post with no packaged rendition falls back to its DASH manifest, from which the tallest stream is taken (DASH keeps audio in a separate file, so those downloads are silent). Reddit's soundless "gif" videos are handled here too. |
-| **RedGIFs**   | Clips hosted on or linked to RedGIFs, resolved through the RedGIFs API to the muxed MP4, which keeps the audio Reddit's rehosted copy usually drops. Selected under the `video` media type.                                                                                                                |
+| **RedGIFs**   | Clips hosted on or linked to RedGIFs, resolved through the RedGIFs API to the muxed MP4, which keeps the audio Reddit's rehosted copy usually drops (`video`). RedGIFs stills are taken too (`image`).                                                                                                     |
 | **Link**      | External link posts, kept only when the target is itself a direct image file with an accepted extension.                                                                                                                                                                                                   |
 | **Text**      | Self posts, saved as a Markdown document: a YAML front-matter block (title, author, date, subreddit, permalink, score, comments, flair, id, type) followed by the post's body, read from the post page.                                                                                                    |
 | **Poll**      | Poll posts, saved as a Markdown document of the listing metadata alone (the question is the title). No page visit.                                                                                                                                                                                         |
@@ -89,8 +89,9 @@ resolver serves that host wherever its URL appears: as a link post's target, beh
 `--follow-links`) inside the body of a self post. The registry doubles as the allowlist for which link may be followed.
 
 With `--scrape-all redgifs`, a RedGIFs post is treated as a pointer to its uploader: the uploader's entire RedGIFs
-profile is paged in and downloaded. Each profile is scraped at most once per run, and `--blacklist redgifs:NAMES`
-names uploaders to skip entirely, before any download.
+profile is paged in and downloaded, in whatever `--types` asks for (their clips, their stills, or both). Each profile
+is scraped at most once per run, and `--blacklist redgifs:NAMES` names uploaders to skip entirely, before any
+download.
 
 ## Sources and filters
 

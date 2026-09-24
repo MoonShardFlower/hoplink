@@ -462,19 +462,29 @@ def test_scrape_all_takes_a_comma_separated_host_list():
 
 
 def test_scraping_a_host_in_full_implies_the_media_it_serves():
-    assert cli.scrape_all_media_types(("redgifs",)) is MediaType.VIDEO
+    # RedGIFs serves clips and stills, and a text-only run wants neither.
+    assert (
+        cli.scrape_all_media_types(("redgifs",), MediaType.TEXT)
+        == MediaType.VIDEO | MediaType.IMAGE
+    )
+
+
+def test_a_host_the_run_already_wants_something_from_implies_nothing():
+    # --types video already reaches RedGIFs' clips, so its stills are not forced in as well.
+    assert cli.scrape_all_media_types(("redgifs",), MediaType.VIDEO) == MediaType(0)
 
 
 def test_scraping_an_unknown_host_implies_nothing():
-    assert cli.scrape_all_media_types(("nosuchhost",)) == MediaType(0)
+    assert cli.scrape_all_media_types(("nosuchhost",), MediaType.TEXT) == MediaType(0)
 
 
-def test_scrape_all_widens_the_requested_types():
-    args = parse(["r/gifs", "--types", "image", "--scrape-all", "redgifs"])
-    widened = MediaType.coerce(args.types) | cli.scrape_all_media_types(
-        coerce_str_list(args.scrape_all)
+def test_scrape_all_widens_types_that_reach_none_of_the_host():
+    args = parse(["r/gifs", "--types", "text", "--scrape-all", "redgifs"])
+    requested = MediaType.coerce(args.types)
+    widened = requested | cli.scrape_all_media_types(
+        coerce_str_list(args.scrape_all), requested
     )
-    assert widened == MediaType.IMAGE | MediaType.VIDEO
+    assert widened == MediaType.TEXT | MediaType.VIDEO | MediaType.IMAGE
 
 
 def options_for(argv):

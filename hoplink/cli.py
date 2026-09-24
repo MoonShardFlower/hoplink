@@ -138,23 +138,26 @@ def _split_pair(
     return head.strip().lower(), tail.strip()
 
 
-def scrape_all_media_types(hosts: Iterable[str]) -> MediaType:
+def scrape_all_media_types(hosts: Iterable[str], wanted: MediaType) -> MediaType:
     """
-    The media types that scraping ``hosts`` in full would produce.
+    The media types to add to ``wanted`` so that scraping ``hosts`` in full is not a no-op.
 
-    Asking for a host's whole profile is pointless if the run doesn't want the kind of media it serves, so the CLI
-    ORs this into ``--types``.
+    Asking for a host's whole profile is pointless if the run wants none of what that host serves, so the CLI ORs
+    this into ``--types``. A host the run *does* already want something from is left alone: RedGIFs serves both
+    clips and stills, and ``--types video --scrape-all redgifs`` means the videos, not the stills as well.
 
     Args:
         hosts: The host names being scraped in full.
+        wanted: The media types the run asked for.
 
     Returns:
-        The combined MediaType, empty when no registered resolver serves any of them.
+        The types to add, empty when no registered resolver serves any of ``hosts`` or when every one of them
+        already has something the run wants.
     """
-    wanted = set(hosts)
+    named = set(hosts)
     combined = MediaType(0)
     for resolver in default_resolvers():
-        if resolver.host in wanted:
+        if resolver.host in named and not (resolver.media_type & wanted):
             combined |= resolver.media_type
     return combined
 
@@ -359,7 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated external hosts whose posts are followed out to the uploader's entire "
         "profile, not just the linked item (e.g. redgifs). Each profile is scraped at most once per "
-        "run. Implies the media types those hosts serve.",
+        "run. A host serving nothing --types asks for implies the media types it does serve.",
     )
     p.add_argument(
         "--blacklist",
@@ -747,9 +750,9 @@ def main(argv: List[str] | None = None) -> int:
         parser.error(str(exc))
     if not media_types:
         parser.error("--types must name at least one media type")
-    # Scraping a host's profiles is pointless if the kind of media it serves isn't wanted, so opt it in.
+    # Scraping a host's profiles is pointless if none of the media it serves is wanted, so opt that host's in.
     scrape_all_hosts = coerce_str_list(args.scrape_all)
-    media_types |= scrape_all_media_types(scrape_all_hosts)
+    media_types |= scrape_all_media_types(scrape_all_hosts, media_types)
 
     try:
         post_filter = build_post_filter(args)

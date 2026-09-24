@@ -566,14 +566,19 @@ only registered hosts are fetched out of a post body.
 ### Whole profiles, blacklists, and per-host settings
 
 With a host named in `scrape_all_hosts`, its resolver treats each post as a pointer to the *uploader*:
-`RedGifsResolver` reads the clip's `userName` and pages that uploader's entire RedGIFs profile into candidates, so
+`RedGifsResolver` reads the item's `userName` and pages that uploader's entire RedGIFs profile into candidates, so
 one linked clip yields the creator's whole catalogue. Those candidates name the uploader as their collection, so
 each profile is stored in a folder of its own with its own manifest.
 
 Each uploader is scraped at most once per extractor. The claim lives in `ctx.state("redgifs")`, taken under its
 lock, so two concurrent jobs cannot both page one profile, and it is given back if the paging comes up empty.
-(This is per run; the profile's own manifest still de-duplicates across runs, so a later run fetches only clips
-added since.) Anonymous uploads, or a profile that reads back empty, fall back to just the linked clip.
+(This is per run; the profile's own manifest still de-duplicates across runs, so a later run fetches only files
+added since.) Anonymous uploads, or a profile that reads back empty, fall back to just the linked item.
+
+A profile holds stills as well as clips, and `RedGifsResolver` declares both `MediaType.VIDEO` and
+`MediaType.IMAGE`. Each item is paged in only if the job asked for its kind, so an images-only run walks a profile
+for its stills alone and never pays for the clips. A still that is one page of a RedGIFs album carries that album's
+id, and is expanded into the album's every image — one extra API call, spent only when images are wanted.
 
 `host_options` carries per-host settings, read through `ctx.host_option(host, key)` or `ctx.host_list(host, key)`
 for name lists:

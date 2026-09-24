@@ -1,28 +1,38 @@
-"""RedGIFs-hosted videos, resolved back to the source for their audio.
+"""RedGIFs-hosted clips and stills, resolved back to the source (a clip for its audio, a still for its full album).
 
-Reddit routinely carries RedGIFs clips as a ``link`` card whose target is ``redgifs.com``. When Reddit rehosts one to
-``v.redd.it`` the sound the clip had on RedGIFs is lost. To preserve the sound we go to the source by resolving the
+Reddit routinely carries RedGIFs media as a ``link`` card whose target is ``redgifs.com``. When Reddit rehosts a clip
+to ``v.redd.it`` the sound it had on RedGIFs is lost. To preserve the sound we go to the source by resolving the
 post's RedGIFs id and ask RedGIFs' API for the pre-muxed MP4 (video and audio).
 
 Resolution uses RedGIFs' documented v2 API (https://github.com/Redgifs/api/wiki):
 
 1. **Token.** ``/v2/auth/temporary`` issues a short-lived bearer token. The token is bound to the requesting IP and
    User-Agent, so (like every download) we fetch through the browser context
-2. **Lookup.** ``/v2/gifs/<id>`` (carrying that token) returns the clip's metadata, including a ``urls`` map of
-   MP4s. We take ``hd`` when present, else ``sd``.
+2. **Lookup.** ``/v2/gifs/<id>`` (carrying that token) returns the item's metadata, including a ``urls`` map of
+   renditions. We take ``hd`` when present, else ``sd``.
+
+**Clips and stills.** RedGIFs hosts both, and files them in one shape: ``gif.type`` tells them apart (see
+`GIF_TYPE_IMAGE`) while ``urls`` carries the same ``hd``/``sd`` pair either way, MP4s for a clip and JPEGs for a
+still. So this resolver declares both :attr:`MediaType.VIDEO` and :attr:`MediaType.IMAGE`, and each item becomes a
+candidate of its own kind. A run keeps only what it asked for: stills are dropped on a video-only run and clips on an
+images-only one, and a still whose extension is outside ``--formats`` is dropped like any other image.
+
+**Albums.** A still is often one page of an album, which it names in ``gif.gallery``. Such a still is expanded into
+the album's every image via ``/v2/gallery/<id>``, so an album yields all of its pages rather than just its cover.
+That costs one extra API call per album, and only on a run that wants images.
 
 This is a :class:`~hoplink.handlers.resolver.LinkResolver`, so it is reached through
 :class:`~hoplink.handlers.external.ExternalLinkHandler` for any URL on the host, wherever that URL was found:
-a link post's target, a crosspost's shared media, or a link in the body of a self post. RedGIFs clips are video, so
-it declares :attr:`MediaType.VIDEO` and is passed over entirely on a run that didn't ask for video.
+a link post's target, a crosspost's shared media, or a link in the body of a self post.
 
-**Scrape-all.** With ``"redgifs"`` in ``config.scrape_all_hosts`` the clip's ``userName`` is read, and the uploader's
-whole RedGIFs profile is paged (``/v2/users/<name>/search``) so every one of their clips is downloaded, not just the
-one Reddit linked. Those candidates name the uploader as their *collection*, so all files of the profile are stored
-in their own folder (``<source>/<uploader>/``). Each profile is scraped at most once per run: the claim is recorded
-in shared state, so concurrent jobs cannot both page one profile, and it is given back if the paging comes up empty.
+**Scrape-all.** With ``"redgifs"`` in ``config.scrape_all_hosts`` the item's ``userName`` is read, and the uploader's
+whole RedGIFs profile is paged (``/v2/users/<name>/search``) so every one of their clips and stills is downloaded,
+not just the one Reddit linked. Those candidates name the uploader as their *collection*, so all files of the profile
+are stored in their own folder (``<source>/<uploader>/``). Each profile is scraped at most once per run: the claim is
+recorded in shared state, so concurrent jobs cannot both page one profile, and it is given back if the paging comes
+up empty.
 
-**Blacklist.** ``host_options={"redgifs": {"blacklist": ...}}``: if a clip's metadata names a ``userName`` on that
+**Blacklist.** ``host_options={"redgifs": {"blacklist": ...}}``: if an item's metadata names a ``userName`` on that
 list, the post is skipped before anything is downloaded. Anonymous uploads carry no username and are not blocked.
 """
 
@@ -31,9 +41,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ..models.media import MediaCandidate, MediaType
+from ..storage import media_extension
 from .resolver import LinkResolver
 from .video import VIDEO_CONTENT_PREFIXES
 
@@ -59,12 +70,33 @@ _MEDIA_RE = re.compile(
     r"(?:^|[/.])(?:media|thumbs)\d*\.redgifs\.com/([A-Za-z0-9]+)", re.I
 )
 
-#: MP4 renditions in descending preference.
+#: Renditions in descending preference. Both a clip and a still offer this pair.
 _QUALITY_ORDER = ("hd", "sd")
+
+#: ``gif.type`` in a v2 response: 1 is a video clip, 2 a still image.
+GIF_TYPE_VIDEO = 1
+GIF_TYPE_IMAGE = 2
+
+#: Extensions that mark a rendition as a still, used when ``gif.type`` is missing or a value RedGIFs added later.
+_IMAGE_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "webp", "gif"})
+
+#: Content types a RedGIFs still may be served as.
+IMAGE_CONTENT_PREFIXES = ("image/",)
 
 #: shared-state keys (see `hoplink.core.state`)
 _TOKEN = "token"
 _SCRAPED = "scraped_users"
+
+
+class RedGifsMedia(NamedTuple):
+    """One downloadable item named by a RedGIFs API response."""
+
+    #: the best rendition's URL
+    url: str
+    #: :attr:`MediaType.VIDEO` for a clip, :attr:`MediaType.IMAGE` for a still
+    media_type: MediaType
+    #: the album this still is one page of, when it is one (clips are never in albums)
+    gallery: Optional[str] = None
 
 
 def redgifs_id(*values: Optional[str]) -> Optional[str]:
@@ -88,6 +120,11 @@ def redgifs_id(*values: Optional[str]) -> Optional[str]:
 def gif_api_url(gif_id: str) -> str:
     """The ``/v2/gifs/<id>`` metadata endpoint for a gif id."""
     return "https://api.redgifs.com/v2/gifs/" + gif_id
+
+
+def gallery_api_url(gallery_id: str) -> str:
+    """The ``/v2/gallery/<id>`` endpoint holding every page of an album."""
+    return "https://api.redgifs.com/v2/gallery/" + gallery_id
 
 
 def user_search_url(username: str, page: int) -> str:
@@ -119,7 +156,7 @@ def parse_token(body: Optional[bytes]) -> Optional[str]:
 
 
 def _best_from_urls(urls: object) -> Optional[str]:
-    """Pick the best audio-bearing MP4 from a gif's ``urls`` map (``hd`` before ``sd``)."""
+    """Pick the best rendition from a gif's ``urls`` map (``hd`` before ``sd``)."""
     if not isinstance(urls, dict):
         return None
     for key in _QUALITY_ORDER:
@@ -129,15 +166,47 @@ def _best_from_urls(urls: object) -> Optional[str]:
     return None
 
 
-def best_media_url(body: Optional[bytes]) -> Optional[str]:
-    """Pick the best audio-bearing MP4 URL from a ``/v2/gifs/<id>`` response body.
+def media_from_gif(gif: object) -> Optional[RedGifsMedia]:
+    """Read one ``gif`` object -- from a lookup, a profile page, or an album -- as a downloadable item.
+
+    Args:
+        gif: One entry of a v2 response, or anything else (which yields None).
+
+    Returns:
+        The item's best rendition, typed by ``gif.type`` and carrying the album it belongs to; None when the entry
+        exposes no usable rendition. For a clip that rendition is the audio-bearing MP4: the silent one is never
+        chosen.
+    """
+    if not isinstance(gif, dict):
+        return None
+    url = _best_from_urls(gif.get("urls"))
+    if url is None:
+        return None
+    kind = gif.get("type")
+    # ``type`` is the documented discriminator; the extension decides when it is absent or a value RedGIFs added
+    # after this was written, so an unknown kind of still is never downloaded as a video again.
+    is_image = kind == GIF_TYPE_IMAGE or (
+        kind != GIF_TYPE_VIDEO and media_extension(url, default="") in _IMAGE_EXTENSIONS
+    )
+    if not is_image:
+        return RedGifsMedia(url, MediaType.VIDEO)
+    gallery = gif.get("gallery")
+    return RedGifsMedia(
+        url,
+        MediaType.IMAGE,
+        gallery if isinstance(gallery, str) and gallery else None,
+    )
+
+
+def best_media(body: Optional[bytes]) -> Optional[RedGifsMedia]:
+    """Read the item a ``/v2/gifs/<id>`` lookup describes.
 
     Args:
         body: The raw JSON response bytes, or None.
 
     Returns:
-        The ``hd`` URL when present, else ``sd``; None if the body is missing, not JSON,
-        or exposes neither rendition. The silent rendition is never chosen.
+        The clip or still it names (see `media_from_gif`); None if the body is missing, not JSON, or exposes
+        no usable rendition.
     """
     if not body:
         return None
@@ -146,7 +215,7 @@ def best_media_url(body: Optional[bytes]) -> Optional[str]:
     except ValueError:
         return None
     gif = data.get("gif") if isinstance(data, dict) else None
-    return _best_from_urls(gif.get("urls")) if isinstance(gif, dict) else None
+    return media_from_gif(gif)
 
 
 def parse_username(body: Optional[bytes]) -> Optional[str]:
@@ -169,55 +238,68 @@ def parse_username(body: Optional[bytes]) -> Optional[str]:
     return name.lower() if isinstance(name, str) and name else None
 
 
-def parse_user_gifs(body: Optional[bytes]) -> Tuple[List[str], int]:
+def _gifs_in(body: Optional[bytes]) -> Tuple[List[RedGifsMedia], object]:
+    """The items of any response carrying a ``gifs`` list, plus that response's raw ``pages`` value."""
+    if not body:
+        return [], None
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return [], None
+    if not isinstance(data, dict):
+        return [], None
+    gifs = data.get("gifs")
+    items = [] if not isinstance(gifs, list) else [media_from_gif(g) for g in gifs]
+    return [item for item in items if item is not None], data.get("pages")
+
+
+def parse_user_gifs(body: Optional[bytes]) -> Tuple[List[RedGifsMedia], int]:
     """Read one page of a ``/v2/users/<name>/search`` response.
 
     Args:
         body: The raw JSON response bytes, or None.
 
     Returns:
-        A ``(urls, pages)`` pair: the best audio-bearing MP4 URL of each clip on this page and the profile's total page
-        count (0 when the body is missing, not JSON, or reports no page count).
+        An ``(items, pages)`` pair: this page's clips and stills, and the profile's total page count (0 when the
+        body is missing, not JSON, or reports no page count).
     """
-    if not body:
-        return [], 0
-    try:
-        data = json.loads(body)
-    except ValueError:
-        return [], 0
-    if not isinstance(data, dict):
-        return [], 0
-    urls: List[str] = []
-    gifs = data.get("gifs")
-    if isinstance(gifs, list):
-        for gif in gifs:
-            url = _best_from_urls(gif.get("urls")) if isinstance(gif, dict) else None
-            if url:
-                urls.append(url)
-    pages = data.get("pages")
-    return urls, pages if isinstance(pages, int) and pages > 0 else 0
+    items, pages = _gifs_in(body)
+    return items, pages if isinstance(pages, int) and pages > 0 else 0
+
+
+def parse_gallery(body: Optional[bytes]) -> List[RedGifsMedia]:
+    """Read every page of an album from a ``/v2/gallery/<id>`` response.
+
+    Args:
+        body: The raw JSON response bytes, or None.
+
+    Returns:
+        The album's images in order, empty when the body is missing, not JSON, or names none.
+    """
+    return _gifs_in(body)[0]
 
 
 class RedGifsResolver(LinkResolver):
-    """RedGIFs URLs: resolve the muxed (audio-bearing) MP4 from RedGIFs' own API."""
+    """RedGIFs URLs: resolve the muxed (audio-bearing) MP4 of a clip, or the images of a still's album."""
 
     host = "redgifs"
     domains = ("redgifs.com",)
-    media_type = MediaType.VIDEO
+    media_type = MediaType.VIDEO | MediaType.IMAGE
 
     def claims(self, url: str) -> bool:
-        """Claim any URL carrying a RedGIFs clip id -- a watch page, an embed, or a direct media URL."""
+        """Claim any URL carrying a RedGIFs id -- a watch page, an embed, or a direct media URL."""
         return redgifs_id(url) is not None
 
     async def resolve(
         self, url: str, ctx: "ExtractionContext", *, ref: str
     ) -> List[MediaCandidate]:
-        """Resolve the clip at ``url`` or, with scrape-all, its uploader's whole profile.
+        """Resolve the item at ``url`` or, with scrape-all, its uploader's whole profile.
 
-        The clip's metadata is fetched once. If its uploader is blacklisted the clip is skipped. Otherwise, in
+        The item's metadata is fetched once. If its uploader is blacklisted the post is skipped. Otherwise, in
         scrape-all mode its uploader is paged into many candidates (unless that profile was already scraped this
-        run), else just the one clip is returned. A clip whose token can't be issued, whose lookup fails, or that
-        exposes no usable rendition is reported via ``ctx.skip`` and yields nothing.
+        run), else just the linked item is returned, expanded to its whole album when it is a still that names one.
+        An item whose token can't be issued, whose lookup fails, that exposes no usable rendition, or that this run
+        didn't ask for is reported via ``ctx.skip`` and yields nothing.
         """
         gif_id = redgifs_id(url)
         if gif_id is None:  # pragma: no cover (claims already required one)
@@ -225,7 +307,7 @@ class RedGifsResolver(LinkResolver):
         result = await self._authed_get(gif_api_url(gif_id), ctx)
         if result is None or not result.ok or result.body is None:
             await ctx.skip(
-                ref, "redgifs: could not resolve video for {}".format(gif_id)
+                ref, "redgifs: could not resolve media for {}".format(gif_id)
             )
             return []
 
@@ -238,17 +320,21 @@ class RedGifsResolver(LinkResolver):
 
         if ctx.scrape_all(self.host):
             profile = await self._scrape_profile(result.body, ref, ctx)
-            if profile is not None:  # None => fall back to the single clip below
+            if profile is not None:  # None => fall back to the single item below
                 return profile
 
-        best = best_media_url(result.body)
+        best = best_media(result.body)
         if best is None:
             await ctx.skip(
-                ref, "redgifs: could not resolve video for {}".format(gif_id)
+                ref, "redgifs: could not resolve media for {}".format(gif_id)
             )
             return []
-        log.debug("redgifs %s: %s", gif_id, best)
-        return [self._candidate(best)]
+        unwanted = self._unwanted(best, ctx)
+        if unwanted is not None:
+            await ctx.skip(ref, "redgifs: {} {}".format(gif_id, unwanted))
+            return []
+        log.debug("redgifs %s: %s", gif_id, best.url)
+        return await self._expand(best, ctx)
 
     async def _scrape_profile(
         self, gif_body: bytes, ref: str, ctx: "ExtractionContext"
@@ -261,24 +347,24 @@ class RedGifsResolver(LinkResolver):
             ctx: The active extraction context.
 
         Returns:
-            One candidate per clip in the uploader's profile, each tagged with the uploader as its collection.
+            One candidate per item in the uploader's profile, each tagged with the uploader as its collection.
             ``[]`` when the profile was already scraped this run or None as "no profile to scrape found" signal.
         """
         user = parse_username(gif_body)
         if user is None:
-            return None  # anonymous upload: nothing to page, keep just the linked clip
+            return None  # anonymous upload: nothing to page, keep just the linked item
         if not await self._claim_profile(user, ctx):
             await ctx.skip(ref, "redgifs: @{} already scraped this run".format(user))
             return []
 
-        urls = await self._page_user(user, ctx)
-        if not urls:
+        items = await self._page_user(user, ctx)
+        if not items:
             # Nothing came back, so give the claim up: a later post may reach the profile when it is readable
-            # again, and this one still falls back to the clip Reddit linked.
+            # again, and this one still falls back to the item Reddit linked.
             await self._release_profile(user, ctx)
             return None
-        log.debug("redgifs @%s: %d clips", user, len(urls))
-        return [self._candidate(u, collection=user) for u in urls]
+        log.debug("redgifs @%s: %d files", user, len(items))
+        return [self._candidate(item, collection=user) for item in items]
 
     async def _claim_profile(self, user: str, ctx: "ExtractionContext") -> bool:
         """Claim ``user`` for scraping, returning False when this run already claimed them.
@@ -300,40 +386,124 @@ class RedGifsResolver(LinkResolver):
         async with store.lock:
             store.data.get(_SCRAPED, set()).discard(user)
 
-    async def _page_user(self, user: str, ctx: "ExtractionContext") -> List[str]:
-        """Walk every page of a user's clips, returning their MP4 URLs (de-duplicated, in order).
+    async def _page_user(
+        self, user: str, ctx: "ExtractionContext"
+    ) -> List[RedGifsMedia]:
+        """Walk every page of a user's profile, returning the items this run wants (de-duplicated, in order).
+
+        Items of a kind the run didn't ask for are dropped here rather than downstream, so a video-only run pays
+        nothing for an uploader's stills. Album covers are expanded into their every page (see `_expand_all`); the
+        cover is one of those pages, which the de-duplication folds back together.
 
         Pacing between pages is the fetch route's job: it holds successive requests to one host
         ``config.api_pause`` apart whoever makes them.
         """
-        urls: List[str] = []
+        items: List[RedGifsMedia] = []
         seen: Set[str] = set()
         page, pages = 1, 1
         while page <= pages and page <= _MAX_PROFILE_PAGES:
             result = await self._authed_get(user_search_url(user, page), ctx)
             if result is None or not result.ok or result.body is None:
+                # The profile is claimed for this run either way, so a page lost to a rate limit means files
+                # silently missing from it. Say so rather than letting the count speak for a complete profile.
+                log.warning(
+                    "redgifs @%s: page %d failed (%s); keeping the %d files collected so far",
+                    user,
+                    page,
+                    result.error if result is not None else "no token",
+                    len(items),
+                )
                 break
-            page_urls, total_pages = parse_user_gifs(result.body)
+            page_items, total_pages = parse_user_gifs(result.body)
             if total_pages:
                 pages = total_pages
-            added = False
-            for u in page_urls:
-                if u not in seen:
-                    seen.add(u)
-                    urls.append(u)
-                    added = True
-            if not added:  # empty or all-duplicate page: stop rather than spin
+            if not page_items:  # an empty page: there is nothing further to walk
                 break
+            wanted = [i for i in page_items if self._unwanted(i, ctx) is None]
+            new = [i for i in await self._expand_all(wanted, ctx) if i.url not in seen]
+            # A page whose every item was already collected means the listing is repeating itself, so stop rather
+            # than spin. A page filtered away entirely is not that: the next page may still hold what was asked
+            # for, and an images-only run would otherwise give up on the first page of clips.
+            if wanted and not new:
+                break
+            for item in new:
+                seen.add(item.url)
+                items.append(item)
             page += 1
-        return urls
+        return items
+
+    def _unwanted(self, media: RedGifsMedia, ctx: "ExtractionContext") -> Optional[str]:
+        """Why this run doesn't want ``media``, phrased for a skip message (None when it does want it).
+
+        Two things can rule an item out: its kind, when the job didn't ask for that media type, and -- for a still,
+        as for every other image the library saves -- an extension outside ``config.formats``.
+        """
+        if not (media.media_type & ctx.wanted):
+            kind = "a still" if media.media_type is MediaType.IMAGE else "a clip"
+            return "is {}, which this run didn't ask for".format(kind)
+        ext = media_extension(media.url, default="")
+        if media.media_type is MediaType.IMAGE and ext not in ctx.formats:
+            return "is a still ({}), which is not in formats".format(
+                "." + ext if ext else "no extension"
+            )
+        return None
+
+    async def _expand_all(
+        self, items: Sequence[RedGifsMedia], ctx: "ExtractionContext"
+    ) -> List[RedGifsMedia]:
+        """Expand every album cover in ``items`` into its pages, leaving everything else as it is."""
+        expanded: List[RedGifsMedia] = []
+        for item in items:
+            expanded.extend(await self._album_pages(item, ctx))
+        return expanded
+
+    async def _album_pages(
+        self, media: RedGifsMedia, ctx: "ExtractionContext"
+    ) -> List[RedGifsMedia]:
+        """The album ``media`` is the cover of, or just ``media`` when it belongs to none.
+
+        An album that cannot be read falls back to the cover alone, so an unreachable ``/v2/gallery/<id>`` costs the
+        image Reddit actually linked rather than losing it.
+        """
+        if not media.gallery:
+            return [media]
+        result = await self._authed_get(gallery_api_url(media.gallery), ctx)
+        if result is None or not result.ok or result.body is None:
+            log.debug(
+                "redgifs album %s is unreadable; keeping its cover", media.gallery
+            )
+            return [media]
+        pages = [
+            p for p in parse_gallery(result.body) if self._unwanted(p, ctx) is None
+        ]
+        log.debug("redgifs album %s: %d images", media.gallery, len(pages))
+        return pages or [media]
+
+    async def _expand(
+        self, media: RedGifsMedia, ctx: "ExtractionContext"
+    ) -> List[MediaCandidate]:
+        """Turn one resolved item into candidates, an album cover into one per page (see `_album_pages`)."""
+        return [self._candidate(page) for page in await self._album_pages(media, ctx)]
 
     def _candidate(
-        self, url: str, *, collection: Optional[str] = None
+        self, media: RedGifsMedia, *, collection: Optional[str] = None
     ) -> MediaCandidate:
-        """Wrap a RedGIFs MP4 URL as a video MediaCandidate, optionally belonging to an uploader's collection."""
+        """Wrap a resolved item as a MediaCandidate, optionally belonging to an uploader's collection.
+
+        A clip is saved as ``.mp4``; a still keeps the extension its URL names, which is also what the run's
+        ``formats`` were checked against.
+        """
+        if media.media_type is MediaType.IMAGE:
+            return MediaCandidate(
+                url=media.url,
+                media_type=MediaType.IMAGE,
+                ext=media_extension(media.url, default="") or None,
+                content_prefixes=IMAGE_CONTENT_PREFIXES,
+                collection=collection,
+            )
         return MediaCandidate(
-            url=url,
-            media_type=self.media_type,
+            url=media.url,
+            media_type=MediaType.VIDEO,
             ext="mp4",
             content_prefixes=VIDEO_CONTENT_PREFIXES,
             collection=collection,

@@ -69,7 +69,7 @@ hoplink r/EarthPorn --limit 50 --sort top --time month
 
 | Type        | Covers                                                                                                                                                 |
 |-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `image`     | single-image posts (`i.redd.it`)                                                                                                                       |
+| `image`     | single-image posts (`i.redd.it`). RedGIFs stills (hosted or linked), expanded to their whole album when they are one page of one                       |
 | `gallery`   | multi-image gallery posts                                                                                                                              |
 | `video`     | `v.redd.it` videos and silent "gif" posts, muxed to MP4. RedGIFs clips (hosted or linked), resolved through the RedGIFs API to their audio-bearing MP4 |
 | `text`      | self posts, saved as a Markdown document (YAML front matter plus the body)                                                                             |
@@ -85,6 +85,10 @@ hoplink r/EarthPorn --limit 50 --sort top --time month
 A post whose type is not listed is skipped before its page is ever opened, so narrowing `--types` saves time.
 `--formats` does not apply to `--types video`, whose container Reddit decides. RedGIFs clips fall under `video`:
 Reddit's rehosted copy is usually silent, so the original is fetched from RedGIFs keeping the audio.
+
+RedGIFs hosts stills as well as clips, and each falls under its own type: a RedGIFs post yields an image on a run
+asking for `image`, a clip on one asking for `video`, and nothing at all on a run that asks for neither. Stills are
+JPEGs, so they go through `--formats` like every other image.
 
 ```bash
 hoplink r/pics --types image,gallery,video
@@ -108,9 +112,12 @@ body of a text post. The set of registered resolvers is what `--scrape-all`, `--
 
 To avoid re-downloading a profile every time that uploader reappears, each profile is scraped **at most once per run**: 
 the first post by an uploader triggers the full scrape, and later posts by the same uploader are skipped with a reason. 
-The flag also implies the media types the named hosts serve (`video` for RedGIFs), so it works without adding 
-`--types video`by hand. Across runs, the profile's own manifest skips clips already saved, so a repeat run fetches only
-what is new.
+Across runs, the profile's own manifest skips files already saved, so a repeat run fetches only what is new.
+
+A profile is paged in whatever `--types` asks for: `--scrape-all redgifs` on an images-only run collects that
+uploader's stills and none of their clips. When the run asks for *nothing* the host serves, the flag would be a no-op,
+so it implies that host's types instead (`--types text --scrape-all redgifs` collects clips and stills too). A host
+the run already reaches is left alone, so `--types video --scrape-all redgifs` stays videos-only.
 
 A scraped profile is stored as a **collection**: its own subfolder of the source directory, named for the uploader, 
 with its own `manifest.json` and files named `0001_someuploader.mp4`. The source's own manifest acts at post level 

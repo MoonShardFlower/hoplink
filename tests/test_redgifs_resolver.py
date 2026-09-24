@@ -1,5 +1,5 @@
 """
-Tests for the RedGIFs resolver: resolve a clip's URL to the audio-bearing MP4.
+Tests for the RedGIFs resolver: a clip's URL to its audio-bearing MP4, a still's to its image (or its whole album).
 
 Browser-free: the module's helpers are plain functions, and ``RedGifsResolver.resolve`` only ever uses ``ctx.fetch``
 and ``ctx.skip``. A small routing fake context exercises the whole two-call API strategy with no Playwright.
@@ -17,9 +17,15 @@ from hoplink.core.browser import FetchResult
 from hoplink.core.state import HostState, SharedState
 from hoplink.handlers.redgifs import (
     AUTH_URL,
+    GIF_TYPE_IMAGE,
+    GIF_TYPE_VIDEO,
+    RedGifsMedia,
     RedGifsResolver,
-    best_media_url,
+    best_media,
+    gallery_api_url,
     gif_api_url,
+    media_from_gif,
+    parse_gallery,
     parse_token,
     parse_user_gifs,
     parse_username,
@@ -35,6 +41,15 @@ WATCH = "https://www.redgifs.com/watch/" + GID
 HD = "https://media.redgifs.com/GleamingWearyGrouse.mp4"
 SD = "https://media.redgifs.com/GleamingWearyGrouse-mobile.mp4"
 
+#: A still and the album it is the cover of. RedGIFs serves stills as JPEGs from the same media hosts.
+STILL = "https://media.redgifs.com/GleamingWearyGrouse-large.jpg"
+ALBUM = "album123"
+ALBUM_PAGES = [
+    STILL,
+    "https://media.redgifs.com/KookyUnrulyWestafricanantelope-large.jpg",
+    "https://media.redgifs.com/SparklingScrawnyJunebug-large.jpg",
+]
+
 #: The post a clip was found on, which is what skip messages name.
 REF = "https://www.reddit.com/r/gifs/comments/r1/clip/"
 
@@ -48,14 +63,18 @@ class FakeContext:
         *,
         scrape_all: bool = False,
         blacklist: Any = (),
+        wanted: MediaType = MediaType.ALL,
+        formats: Any = None,
     ) -> None:
         self.routes = routes
         self.config = ExtractorConfig(
             scroll_pause=0.0,
             scrape_all_hosts=("redgifs",) if scrape_all else (),
             host_options={"redgifs": {"blacklist": blacklist}} if blacklist else {},
+            **({} if formats is None else {"formats": formats}),
         )
-        self.wanted = MediaType.ALL
+        self.formats = frozenset(self.config.formats)
+        self.wanted = wanted
         self.fetches: List[tuple[str, Any]] = []
         self.skips: List[tuple[str, str]] = []
         self.sleeps = 0
@@ -130,9 +149,44 @@ def gif_by(user: str, urls: dict | None = None) -> FetchResult:
     )
 
 
-def user_page(urls: list, *, pages: int = 1) -> FetchResult:
-    """One page of a ``/v2/users/<name>/search`` response, one gif per URL."""
-    gifs = [{"id": "g{}".format(i), "urls": {"hd": u}} for i, u in enumerate(urls)]
+def gif_entry(url: str, index: int = 0, *, gallery: str | None = None) -> dict:
+    """One ``gif`` object as RedGIFs files it: ``type`` 2 for a still, 1 for a clip."""
+    is_image = url.endswith(".jpg")
+    entry: dict = {
+        "id": "g{}".format(index),
+        "type": GIF_TYPE_IMAGE if is_image else GIF_TYPE_VIDEO,
+        "urls": {"hd": url},
+    }
+    if gallery:
+        entry["gallery"] = gallery
+    return entry
+
+
+def still_result(url: str = STILL, *, gallery: str | None = None) -> FetchResult:
+    """A ``/v2/gifs/<id>`` response describing a still, optionally one page of an album."""
+    body = json.dumps({"gif": gif_entry(url, gallery=gallery)}).encode()
+    return FetchResult(ok=True, status=200, content_type="application/json", body=body)
+
+
+def gallery_result(urls: list, *, ok: bool = True) -> FetchResult:
+    """A ``/v2/gallery/<id>`` response listing an album's pages."""
+    body = json.dumps(
+        {"id": ALBUM, "gifs": [gif_entry(u, i) for i, u in enumerate(urls)]}
+    ).encode()
+    return FetchResult(
+        ok=ok,
+        status=200 if ok else 404,
+        content_type="application/json",
+        body=body if ok else None,
+    )
+
+
+def user_page(urls: list, *, pages: int = 1, gallery: str | None = None) -> FetchResult:
+    """One page of a ``/v2/users/<name>/search`` response, one gif per URL.
+
+    ``gallery`` names the album every still on the page belongs to.
+    """
+    gifs = [gif_entry(u, i, gallery=gallery) for i, u in enumerate(urls)]
     body = json.dumps({"page": 1, "pages": pages, "total": len(urls), "gifs": gifs})
     return FetchResult(
         ok=True, status=200, content_type="application/json", body=body.encode()
@@ -198,31 +252,99 @@ def test_an_empty_or_invalid_body_is_none():
     assert parse_token(b"{not json") is None
 
 
-# -- best_media_url ---------------------------------------------------------
+# -- best_media -------------------------------------------------------------
 
 
 def test_hd_is_preferred_over_sd():
-    assert best_media_url(gif_result({"hd": HD, "sd": SD}).body) == HD
+    assert best_media(gif_result({"hd": HD, "sd": SD}).body) == (
+        HD,
+        MediaType.VIDEO,
+        None,
+    )
 
 
 def test_sd_is_used_when_there_is_no_hd():
-    assert best_media_url(gif_result({"sd": SD}).body) == SD
+    assert best_media(gif_result({"sd": SD}).body).url == SD
 
 
 def test_the_silent_rendition_is_never_chosen():
     # Only 'silent'/'poster' offered: nothing with audio, so nothing is returned.
-    assert best_media_url(gif_result({"silent": HD, "poster": SD}).body) is None
+    assert best_media(gif_result({"silent": HD, "poster": SD}).body) is None
 
 
 def test_a_non_string_url_is_ignored():
-    assert best_media_url(gif_result({"hd": 42, "sd": SD}).body) == SD
+    assert best_media(gif_result({"hd": 42, "sd": SD}).body).url == SD
 
 
 def test_a_body_with_no_usable_shape_is_none():
-    assert best_media_url(None) is None
-    assert best_media_url(b"{not json") is None
-    assert best_media_url(json.dumps({"gif": {}}).encode()) is None
-    assert best_media_url(json.dumps({"gif": {"urls": "nope"}}).encode()) is None
+    assert best_media(None) is None
+    assert best_media(b"{not json") is None
+    assert best_media(json.dumps({"gif": {}}).encode()) is None
+    assert best_media(json.dumps({"gif": {"urls": "nope"}}).encode()) is None
+
+
+# -- media_from_gif: telling a still from a clip ----------------------------
+
+
+def test_a_type_2_entry_is_a_still():
+    assert media_from_gif(gif_entry(STILL)) == RedGifsMedia(STILL, MediaType.IMAGE)
+
+
+def test_a_type_1_entry_is_a_clip():
+    assert media_from_gif(gif_entry(HD)) == (HD, MediaType.VIDEO, None)
+
+
+def test_a_still_carries_the_album_it_belongs_to():
+    assert media_from_gif(gif_entry(STILL, gallery=ALBUM)).gallery == ALBUM
+
+
+def test_an_empty_album_id_is_no_album():
+    assert media_from_gif(gif_entry(STILL, gallery="")).gallery is None
+    assert (
+        media_from_gif(
+            {"type": GIF_TYPE_IMAGE, "urls": {"hd": STILL}, "gallery": 42}
+        ).gallery
+        is None
+    )
+
+
+def test_an_entry_without_a_type_falls_back_to_its_extension():
+    # RedGIFs may add a type this was not written against; a still must not become an .mp4 candidate again.
+    assert media_from_gif({"urls": {"hd": STILL}}).media_type is MediaType.IMAGE
+    assert media_from_gif({"urls": {"hd": HD}}).media_type is MediaType.VIDEO
+    assert (
+        media_from_gif({"type": 7, "urls": {"hd": STILL}}).media_type is MediaType.IMAGE
+    )
+
+
+def test_an_entry_that_is_not_an_object_or_has_no_rendition_is_none():
+    assert media_from_gif(None) is None
+    assert media_from_gif("nope") is None
+    assert media_from_gif({"type": GIF_TYPE_IMAGE, "urls": {}}) is None
+
+
+# -- parse_gallery ----------------------------------------------------------
+
+
+def test_an_album_yields_every_page_in_order():
+    assert [
+        m.url for m in parse_gallery(gallery_result(ALBUM_PAGES).body)
+    ] == ALBUM_PAGES
+    assert all(
+        m.media_type is MediaType.IMAGE
+        for m in parse_gallery(gallery_result(ALBUM_PAGES).body)
+    )
+
+
+def test_a_bad_album_body_yields_nothing():
+    assert parse_gallery(None) == []
+    assert parse_gallery(b"{not json") == []
+    assert parse_gallery(b"[]") == []
+    assert parse_gallery(json.dumps({"gifs": "nope"}).encode()) == []
+
+
+def test_gallery_api_url_names_the_album():
+    assert gallery_api_url(ALBUM) == "https://api.redgifs.com/v2/gallery/" + ALBUM
 
 
 # -- claims -----------------------------------------------------------------
@@ -230,7 +352,10 @@ def test_a_body_with_no_usable_shape_is_none():
 
 def test_the_resolver_names_the_host_it_serves():
     resolver = RedGifsResolver()
-    assert (resolver.host, resolver.media_type) == ("redgifs", MediaType.VIDEO)
+    assert (resolver.host, resolver.media_type) == (
+        "redgifs",
+        MediaType.VIDEO | MediaType.IMAGE,
+    )
 
 
 def test_the_resolver_claims_redgifs_urls_only():
@@ -261,6 +386,92 @@ async def test_the_candidate_accepts_video_content_types():
     )
     cand = (await resolve(ctx))[0]
     assert cand.content_prefixes == ("video/", "application/octet-stream")
+
+
+async def test_a_still_is_resolved_as_an_image():
+    ctx = FakeContext({AUTH_URL: token_result(), gif_api_url(GID): still_result()})
+    candidates = await resolve(ctx)
+    assert [(c.url, c.ext, c.media_type) for c in candidates] == [
+        (STILL, "jpg", MediaType.IMAGE)
+    ]
+
+
+async def test_a_stills_candidate_accepts_image_content_types():
+    # The bug this fixes: a still went out expecting video/*, and its download died as an "unexpected content-type".
+    ctx = FakeContext({AUTH_URL: token_result(), gif_api_url(GID): still_result()})
+    assert (await resolve(ctx))[0].content_prefixes == ("image/",)
+
+
+async def test_a_still_is_skipped_when_the_run_wants_no_images():
+    ctx = FakeContext(
+        {AUTH_URL: token_result(), gif_api_url(GID): still_result()},
+        wanted=MediaType.VIDEO,
+    )
+    assert await resolve(ctx) == []
+    assert "didn't ask for" in ctx.skips[0][1]
+
+
+async def test_a_clip_is_skipped_when_the_run_wants_no_video():
+    ctx = FakeContext(
+        {AUTH_URL: token_result(), gif_api_url(GID): gif_result({"hd": HD})},
+        wanted=MediaType.IMAGE,
+    )
+    assert await resolve(ctx) == []
+    assert "didn't ask for" in ctx.skips[0][1]
+
+
+async def test_a_still_outside_the_requested_formats_is_skipped():
+    ctx = FakeContext(
+        {AUTH_URL: token_result(), gif_api_url(GID): still_result()}, formats="png"
+    )
+    assert await resolve(ctx) == []
+    assert "not in formats" in ctx.skips[0][1]
+
+
+# -- resolve: albums --------------------------------------------------------
+
+
+async def test_a_still_in_an_album_yields_the_whole_album():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): still_result(gallery=ALBUM),
+            gallery_api_url(ALBUM): gallery_result(ALBUM_PAGES),
+        }
+    )
+    candidates = await resolve(ctx)
+    assert [c.url for c in candidates] == ALBUM_PAGES
+    assert all(c.media_type is MediaType.IMAGE for c in candidates)
+
+
+async def test_an_unreadable_album_falls_back_to_the_linked_still():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): still_result(gallery=ALBUM),
+            gallery_api_url(ALBUM): gallery_result([], ok=False),
+        }
+    )
+    assert [c.url for c in await resolve(ctx)] == [STILL]
+
+
+async def test_an_empty_album_falls_back_to_the_linked_still():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): still_result(gallery=ALBUM),
+            gallery_api_url(ALBUM): gallery_result([]),
+        }
+    )
+    assert [c.url for c in await resolve(ctx)] == [STILL]
+
+
+async def test_a_clip_never_costs_an_album_lookup():
+    ctx = FakeContext(
+        {AUTH_URL: token_result(), gif_api_url(GID): gif_result({"hd": HD})}
+    )
+    await resolve(ctx)
+    assert not any("gallery" in url for url, _ in ctx.fetches)
 
 
 async def test_the_bearer_token_is_sent_on_the_lookup_only():
@@ -325,7 +536,7 @@ async def test_a_failed_lookup_is_skipped_with_a_reason():
     )
     assert await resolve(ctx) == []
     # the skip names the post the clip was found on, not the clip URL
-    assert ctx.skips == [(REF, "redgifs: could not resolve video for " + GID)]
+    assert ctx.skips == [(REF, "redgifs: could not resolve media for " + GID)]
 
 
 async def test_a_lookup_with_no_audio_rendition_is_skipped():
@@ -374,16 +585,22 @@ def test_username_from_a_bad_body_is_none():
 # -- parse_user_gifs --------------------------------------------------------
 
 
-def test_a_user_page_yields_each_clips_best_url_and_the_page_count():
-    urls, pages = parse_user_gifs(user_page([HD, SD], pages=3).body)
-    assert (urls, pages) == ([HD, SD], 3)
+def test_a_user_page_yields_each_items_best_url_and_the_page_count():
+    items, pages = parse_user_gifs(user_page([HD, SD], pages=3).body)
+    assert ([i.url for i in items], pages) == ([HD, SD], 3)
 
 
-def test_user_page_clips_without_a_usable_rendition_are_dropped():
+def test_a_user_page_types_its_stills_and_its_clips():
+    items, _ = parse_user_gifs(user_page([HD, STILL]).body)
+    assert [i.media_type for i in items] == [MediaType.VIDEO, MediaType.IMAGE]
+
+
+def test_user_page_items_without_a_usable_rendition_are_dropped():
     body = json.dumps(
         {"pages": 1, "gifs": [{"urls": {"hd": HD}}, {"urls": {"silent": SD}}, {}]}
     ).encode()
-    assert parse_user_gifs(body) == ([HD], 1)
+    items, pages = parse_user_gifs(body)
+    assert ([i.url for i in items], pages) == ([HD], 1)
 
 
 def test_a_bad_user_page_body_is_empty_with_zero_pages():
@@ -391,6 +608,7 @@ def test_a_bad_user_page_body_is_empty_with_zero_pages():
     assert parse_user_gifs(b"{not json") == ([], 0)
     assert parse_user_gifs(json.dumps({"gifs": []}).encode()) == ([], 0)  # no pages
     assert parse_user_gifs(b"[]") == ([], 0)  # a JSON array, not the expected object
+    assert parse_user_gifs(json.dumps({"pages": 0, "gifs": []}).encode()) == ([], 0)
 
 
 def test_user_search_url_pages_newest_first():
@@ -416,6 +634,106 @@ async def test_scrape_all_pages_the_whole_profile():
     candidates = await resolve(ctx)
     assert [x.url for x in candidates] == [a, b, c]
     assert all(x.media_type is MediaType.VIDEO and x.ext == "mp4" for x in candidates)
+
+
+async def test_a_scraped_profile_keeps_its_stills_as_well_as_its_clips():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD, STILL]),
+        },
+        scrape_all=True,
+    )
+    candidates = await resolve(ctx)
+    assert [(c.url, c.media_type, c.ext) for c in candidates] == [
+        (HD, MediaType.VIDEO, "mp4"),
+        (STILL, MediaType.IMAGE, "jpg"),
+    ]
+
+
+async def test_a_scraped_profiles_stills_are_dropped_on_a_video_only_run():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD, STILL]),
+        },
+        scrape_all=True,
+        wanted=MediaType.VIDEO,
+    )
+    assert [c.url for c in await resolve(ctx)] == [HD]
+
+
+async def test_a_scraped_profiles_clips_are_dropped_on_an_image_only_run():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator", {"hd": STILL}),
+            user_search_url("creator", 1): user_page([HD, STILL]),
+        },
+        scrape_all=True,
+        wanted=MediaType.IMAGE,
+    )
+    assert [c.url for c in await resolve(ctx)] == [STILL]
+
+
+async def test_a_scraped_profile_expands_its_albums_and_folds_the_cover_back_in():
+    # The cover is itself one page of the album, so paging it in must not save the same file twice.
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([STILL], gallery=ALBUM),
+            gallery_api_url(ALBUM): gallery_result(ALBUM_PAGES),
+        },
+        scrape_all=True,
+    )
+    assert [c.url for c in await resolve(ctx)] == ALBUM_PAGES
+
+
+async def test_paging_walks_past_a_page_holding_nothing_the_run_asked_for():
+    # A page filtered away entirely is not an exhausted profile: the stills are on page 2 here.
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator", {"hd": STILL}),
+            user_search_url("creator", 1): user_page([HD, SD], pages=2),
+            user_search_url("creator", 2): user_page([STILL], pages=2),
+        },
+        scrape_all=True,
+        wanted=MediaType.IMAGE,
+    )
+    assert [c.url for c in await resolve(ctx)] == [STILL]
+
+
+async def test_paging_stops_on_a_page_that_only_repeats_what_was_collected():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD], pages=3),
+            user_search_url("creator", 2): user_page([HD], pages=3),
+        },
+        scrape_all=True,
+    )
+    assert [c.url for c in await resolve(ctx)] == [HD]
+    # Page 3 is never asked for: page 2 repeated page 1.
+    assert user_search_url("creator", 3) not in [url for url, _ in ctx.fetches]
+
+
+async def test_a_video_only_profile_run_never_looks_up_an_album():
+    ctx = FakeContext(
+        {
+            AUTH_URL: token_result(),
+            gif_api_url(GID): gif_by("creator"),
+            user_search_url("creator", 1): user_page([HD, STILL], gallery=ALBUM),
+        },
+        scrape_all=True,
+        wanted=MediaType.VIDEO,
+    )
+    await resolve(ctx)
+    assert not any("gallery" in url for url, _ in ctx.fetches)
 
 
 async def test_a_scraped_profile_is_tagged_as_its_uploaders_collection():
