@@ -16,6 +16,7 @@ import pytest
 
 from hoplink.core.browser import FetchResult
 from hoplink.core.extractor import (
+    CUTOFF_RUN,
     JS_HARVEST,
     JS_HARVEST_LEGACY,
     JS_IS_MODERN,
@@ -419,6 +420,62 @@ async def test_a_fresh_round_resets_the_stale_counter():
     hle, _, _ = build(rounds, max_stale_scrolls=2)
     result = await hle.extract(Subreddit("pics", limit=100), media_types=MediaType.ALL)
     assert result.posts_scanned == 2  # the stale round did not end the harvest
+
+
+#: A date filter's lower bound, and a post from before it (``harvested`` stamps its posts 2026-07-16).
+SINCE = PostFilter(after="2026-06-01")
+
+
+def old(pid: str, **overrides: Any) -> dict[str, Any]:
+    """A harvest record created before `SINCE`."""
+    return harvested(pid, created="2026-01-01T00:00:00.000000+0000", **overrides)
+
+
+async def test_a_new_listing_stops_scrolling_once_past_the_date_cutoff():
+    olds = [old("o{}".format(n)) for n in range(CUTOFF_RUN)]
+    rounds = [[harvested("a")], olds, [old("never")]]
+    hle, _, browser = build(rounds)
+    result = await hle.extract(
+        Subreddit("pics", limit=100), media_types=MediaType.ALL, post_filter=SINCE
+    )
+    assert result.posts_scanned == 1 + CUTOFF_RUN  # "never" was not harvested
+    assert len(browser.pages[0].scrolls) == 1  # only the round before the old run
+    assert result.posts_matched == 1
+    # the old run is still harvested, then rejected by the filter
+    assert result.posts_filtered == CUTOFF_RUN
+
+
+async def test_a_short_run_of_old_posts_does_not_stop_the_harvest():
+    # Unflagged pins at the top of the listing: old, but followed by newer posts.
+    pins = [old("p{}".format(n)) for n in range(CUTOFF_RUN - 1)]
+    rounds = [pins + [harvested("a")], [harvested("b")]]
+    hle, _, _ = build(rounds, max_stale_scrolls=1)
+    result = await hle.extract(
+        Subreddit("pics", limit=100), media_types=MediaType.ALL, post_filter=SINCE
+    )
+    assert [p.id for p in result.posts] == ["a", "b"]
+
+
+async def test_stickied_posts_do_not_count_toward_the_cutoff_run():
+    pins = [old("p{}".format(n), stickied=True) for n in range(CUTOFF_RUN)]
+    rounds = [pins, [harvested("a")]]
+    hle, _, _ = build(rounds, max_stale_scrolls=1)
+    result = await hle.extract(
+        Subreddit("pics", limit=100), media_types=MediaType.ALL, post_filter=SINCE
+    )
+    assert [p.id for p in result.posts] == ["a"]
+
+
+async def test_the_date_cutoff_does_not_stop_a_listing_not_sorted_by_new():
+    olds = [old("o{}".format(n)) for n in range(CUTOFF_RUN)]
+    rounds = [olds, [harvested("a")]]
+    hle, _, _ = build(rounds, max_stale_scrolls=1)
+    result = await hle.extract(
+        Subreddit("pics", sort="top", limit=100),
+        media_types=MediaType.ALL,
+        post_filter=SINCE,
+    )
+    assert [p.id for p in result.posts] == ["a"]
 
 
 async def test_scrolling_uses_the_configured_distance():

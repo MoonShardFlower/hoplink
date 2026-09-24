@@ -102,7 +102,8 @@ def _add_filter_arguments(p: argparse.ArgumentParser) -> None:
         "--after",
         metavar="DATE",
         default=None,
-        help="Keep posts created at or after DATE (ISO-8601, e.g. 2026-01-01).",
+        help="Keep posts created at or after DATE (ISO-8601, e.g. 2026-01-01). With --sort new, scrolling stops "
+        "once the listing is past DATE.",
     )
     g.add_argument(
         "--before",

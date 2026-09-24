@@ -233,6 +233,9 @@ Special behaviours:
   Reddit's listing accepts exactly one flair (`--flair a,b` is filtered here), and combined listings (`r/a+b`) and user 
   profiles are served on markup that ignores the parameter. When Reddit does the filtering, a flair that matches nothing
   yields an empty run rather than a "no posts rendered" error.
+- **`--after` stops a `--sort new` listing early.** A `new` listing runs newest-first, so once the harvester has seen
+  10 consecutive posts older than DATE it stops scrolling instead of paging on to `--limit`. Pinned posts at the top of
+  a listing, whatever their age, are too few to trigger it. With any other sort `--after` only filters.
 
 ## Browser
 

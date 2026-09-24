@@ -129,6 +129,11 @@ JS_HARVEST_LEGACY = """
 #: stalls after the first ~25 posts. Driving the scroll from JS moves the document directly.
 JS_SCROLL = "(px) => window.scrollBy(0, px)"
 
+#: A ``new`` listing may open with pinned posts of any age before its newest-first part begins (a subreddit allows two
+#: stickies, a profile a handful of pins), and a pin is not always flagged ``stickied``. So a date cutoff ends the harvest
+#: only after this many consecutive posts older than it, comfortably more than any run of pins can supply.
+CUTOFF_RUN = 10
+
 #: legacy listings paginate instead of infinite-scrolling
 JS_NEXT_PAGE = """
 () => { const a = document.querySelector('span.next-button a'); return a ? a.href : null; }
@@ -464,7 +469,12 @@ class AsyncHoplinkExtractor:
         return None
 
     async def _harvest(
-        self, page: Any, source: Source, ev: Events, flair: str | None = None
+        self,
+        page: Any,
+        source: Source,
+        ev: Events,
+        flair: str | None = None,
+        cutoff: datetime | None = None,
     ) -> List[Post]:
         """
         Walk the listing, accumulating posts round by round.
@@ -479,9 +489,13 @@ class AsyncHoplinkExtractor:
             ev: Progress callbacks (``on_scroll`` fires each round).
             flair: A link flair to ask Reddit to filter the listing by, honored only by sources that support it
                 (see `Source.listing_url`). ``source.limit`` then counts matching posts rather than posts scrolled past.
+            cutoff: For a newest-first listing only: stop once the listing is past this moment, i.e. after
+                `CUTOFF_RUN` consecutive posts created before it. Posts flagged ``stickied`` neither count toward the
+                run nor break it, and a post with no creation time breaks it.
 
         Returns:
-            Up to ``source.limit`` posts, in listing order.
+            Up to ``source.limit`` posts, in listing order. With a ``cutoff``, the last few are older than it and are
+            left for the post filter to reject.
 
         Raises:
             NoPostsFoundError: If the listing never renders any posts. A listing Reddit filtered by flair is
@@ -502,6 +516,7 @@ class AsyncHoplinkExtractor:
         harvested: dict[str, dict[str, Any]] = {}
         order: List[str] = []
         stale = 0
+        old_run = 0  # consecutive posts, in listing order, created before the cutoff
         while len(harvested) < source.limit and stale < cfg.max_stale_scrolls:
             new_this_round = 0
             for data in await page.evaluate(harvest_js):
@@ -510,9 +525,22 @@ class AsyncHoplinkExtractor:
                     harvested[pid] = data
                     order.append(pid)
                     new_this_round += 1
+                    if cutoff is not None:
+                        post = Post.from_harvest(data)
+                        # A flagged pin's age says nothing about how far down the listing the harvest has got.
+                        if not post.stickied:
+                            created = post.created_at
+                            old_run = old_run + 1 if created and created < cutoff else 0
             stale = stale + 1 if new_this_round == 0 else 0
             await emit(ev.on_scroll, source, len(harvested), new_this_round)
             if len(harvested) >= source.limit:
+                break
+            if cutoff is not None and old_run >= CUTOFF_RUN:
+                log.info(
+                    "%s: listing is past %s, stopping the harvest",
+                    source.key,
+                    cutoff.isoformat(),
+                )
                 break
             if modern:
                 await page.evaluate(JS_SCROLL, cfg.scroll_px)
@@ -809,8 +837,17 @@ class AsyncHoplinkExtractor:
             # Hand the flair to Reddit when both the filter and the source support it. The client-side flair
             # check below still runs, keeping the result correct if a listing ignores ?f=.
             flair = post_filter.server_side_flair if post_filter is not None else None
+            # A ``new`` listing runs newest-first, so once it is past the filter's lower date bound nothing further
+            # down can pass the filter either, and the harvest may stop scrolling.
+            cutoff = (
+                post_filter.after
+                if post_filter is not None and getattr(source, "sort", None) == "new"
+                else None
+            )
             with timings.measure("harvest"):
-                posts = await self._harvest(page, source, ev, flair=flair)
+                posts = await self._harvest(
+                    page, source, ev, flair=flair, cutoff=cutoff
+                )
             result.posts_scanned = len(posts)
             await emit(ev.on_harvested, source, len(posts))
 
